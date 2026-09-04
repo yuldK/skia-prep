@@ -120,16 +120,33 @@ function Get-PngCodec {
     return 'libpng'
 }
 
-# rust 갈래의 crate 고지는 bazel이 자기 output base에 받아 둔 자리에만 있다.
-# 그 자리를 묻는 길은 bazel 자신뿐이라 bazelisk를 부른다.
-# 이것이 없으면 rust 갈래는 고지를 채울 수 없으므로 **조용히 넘기지 않는다** —
-# 고지 없이 배포하는 것이 바로 막으려는 구멍이다.
+# rust 갈래의 crate 고지가 놓인 자리를 찾는다.
+# 원본은 bazel이 자기 output base에 받아 두는 것이고, 그 자리를 묻는 길은 bazel
+# 자신뿐이라 bazelisk를 부른다. 어디에서도 찾지 못하면 rust 갈래는 고지를 채울 수
+# 없으므로 **조용히 넘기지 않는다** — 고지 없이 배포하는 것이 바로 막으려는 구멍이다.
+#
+# 찾는 순서는 셋이다.
+#   1. -RustLicenseRoot
+#   2. third_party/rust-licenses  ← 이 저장소가 떠 둔 사본
+#   3. bazelisk info output_base
+#
+# 2가 있는 이유는 bazel 캐시가 15 GB까지 자라 평소에 지우기 때문이다. 지우고 나면
+# 3은 **전체 재빌드 없이는 되살아나지 않는데**, 필요한 것은 텍스트 0.7 MB뿐이라
+# 저장소가 들고 있는 편이 싸다. 배치는 bazel의 것과 같게 두어 아래 걷는 함수 둘이
+# 두 자리를 구별하지 않는다.
+#  - crate 목록이 바뀌면(Skia의 MODULE.bazel) 이 사본도 다시 떠야 한다. 캐시가
+#    살아 있는 기계에서 3으로 한 번 돌려 대조한다.
 function Resolve-RustLicenseRoot {
     if ($RustLicenseRoot) {
         if (-not (Test-Path -LiteralPath $RustLicenseRoot -PathType Container)) {
             throw "The given -RustLicenseRoot was not found: $RustLicenseRoot"
         }
         return (Resolve-Path -LiteralPath $RustLicenseRoot).Path
+    }
+
+    $vendored = Join-Path $repository_root 'third_party\rust-licenses'
+    if (Test-Path -LiteralPath $vendored -PathType Container) {
+        return (Resolve-Path -LiteralPath $vendored).Path
     }
 
     $bazelisk = $BazeliskPath
@@ -149,12 +166,17 @@ function Resolve-RustLicenseRoot {
     }
     if (-not $bazelisk) {
         throw @"
-This is a rust png build, and its crate notices live in the Bazel output base.
-bazelisk.exe was not found, so this script cannot locate it.
+This is a rust png build, and its crate notices were not found.
+
+Looked in:
+  third_party\rust-licenses          (this repository's copy - it is missing)
+  bazelisk info output_base          (bazelisk.exe was not found)
 
 Do one of these:
-  1. Pass -BazeliskPath <path to bazelisk.exe>.
-  2. Pass -RustLicenseRoot <the "external" directory of the Bazel output base>.
+  1. Restore third_party\rust-licenses from git - it is the cheap path and
+     needs no Bazel at all.
+  2. Pass -BazeliskPath <path to bazelisk.exe>.
+  3. Pass -RustLicenseRoot <the "external" directory of the Bazel output base>.
      Find it with: bazelisk info output_base   (run inside $skia_root)
 
 Packaging the rust flavour without those notices is exactly the gap this

@@ -9,6 +9,9 @@
 # patch 파일은 LF를 유지해야 `git apply`가 성립한다.
 *.patch -text
 
+# 제3자 라이선스 원문이다. 한 바이트도 고치지 않는다.
+/third_party/rust-licenses/** -text
+
 # submodule로 가져오는 제3자 소스는 정규화하지 않는다.
 /third_party/skia/** -text
 /third_party/skia-externals/** -text
