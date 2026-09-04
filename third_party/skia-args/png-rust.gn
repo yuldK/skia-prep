@@ -1,0 +1,20 @@
+# png 코덱을 rust로 세운다. build_skia.ps1 -RustPng이 고르는 쪽이다.
+#
+# 이 조각은 홀로 쓰지 않는다. skia-ui-{debug,release,release-text}.gn 뒤에
+# 이어 붙여 하나의 GN args로 넘긴다 — 기본 파일에는 png와 zlib이 없다.
+#
+# **bazelisk가 필요하다.** Skia 148의 rust 경로는 cargo가 아니라 Bazel로 선다:
+# BUILD.gn의 action("rust_all_ffi_bazel_build")가 gn/bazel_build.py를 부르고
+# 그 script가 `bazelisk build //rust/png:ffi_rs`를 실행한다. rust 도구사슬은
+# bazel이 rules_rust로 스스로 받는다 — rustup을 따로 깔 필요는 없다.
+#
+# 얻는 것은 APNG다. 움직이는 png를 읽는 코덱은 이쪽뿐이다.
+skia_use_rust_png_decode = true
+skia_use_rust_png_encode = true
+
+skia_use_libpng_decode = false
+skia_use_libpng_encode = false
+skia_use_no_png_encode = false
+
+# zlib은 libpng이 쓰던 것이다. rust 코덱은 압축을 스스로 한다.
+skia_use_zlib = false

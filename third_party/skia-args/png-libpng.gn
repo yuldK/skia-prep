@@ -1,0 +1,18 @@
+# png 코덱을 libpng(C)로 세운다. build_skia.ps1이 기본으로 고르는 쪽이다.
+#
+# 이 조각은 홀로 쓰지 않는다. skia-ui-{debug,release,release-text}.gn 뒤에
+# 이어 붙여 하나의 GN args로 넘긴다 — 기본 파일에는 png와 zlib이 없다.
+#
+# 이쪽을 고르면 APNG(움직이는 png)는 정지 이미지로 나온다. SkPngCodec은 APNG를
+# 읽지 않는다 — 읽는 것은 rust 코덱뿐이다 (png-rust.gn).
+skia_use_libpng_decode = true
+skia_use_libpng_encode = true
+skia_use_system_libpng = false
+skia_use_no_png_encode = false
+
+skia_use_rust_png_decode = false
+skia_use_rust_png_encode = false
+
+# zlib은 libpng이 쓴다. rust 쪽에는 없다.
+skia_use_zlib = true
+skia_use_system_zlib = false

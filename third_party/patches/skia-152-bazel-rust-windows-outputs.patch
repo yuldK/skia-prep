@@ -1,0 +1,30 @@
+Windows bazel makes MSVC archives, but the GN copy step looks for the Linux and mac
+names. Every rust build then fails after bazel has already succeeded, in the copy.
+
+Only the source paths change. The destinations keep the lib*.a names so the artifact
+list in this repository (SKIA_UI_SKIA_RUST_PNG_COMPONENTS) stays as it is.
+
+Only the -RustPng configuration reads this block, so the default build never needs it.
+
+diff --git a/BUILD.gn b/BUILD.gn
+index df31ad6..461d5a9 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1410,7 +1410,7 @@ if (skia_use_fontations || skia_use_rust_png_decode ||
+     ]
+     _rust_output_mappings += [
+       rebase_path(
+-              "//bazel-bin/external/rules_rust++crate+crates__cxx-1.0.168/libcxx_cc.a",
++              "//bazel-bin/external/rules_rust++crate+crates__cxx-1.0.168/cxx_cc.lib",
+               root_build_dir) + "=libcxx_cc.a",
+       rebase_path(
+               "//bazel-bin/external/rules_rust++crate+crates__cxx-1.0.168/_virtual_includes/cxx_cc/third_party/rust/cxx/v1/cxx.h",
+@@ -1453,7 +1453,7 @@ if (skia_use_fontations || skia_use_rust_png_decode ||
+       "$root_out_dir/rust/png/FFI.rs.cc",
+     ]
+     _rust_output_mappings += [
+-      rebase_path("//bazel-bin/rust/png/libffi_rs.a", root_build_dir) +
++      rebase_path("//bazel-bin/rust/png/ffi_rs.lib", root_build_dir) +
+           "=librust_png_ffi_rs.a",
+       rebase_path("//bazel-bin/rust/png/FFI.rs.h", root_build_dir) +
+           "=rust/png/FFI.rs.h",

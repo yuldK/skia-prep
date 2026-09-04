@@ -1,0 +1,55 @@
+target_cpu = "x64"
+target_os = "win"
+is_official_build = false
+is_debug = true
+is_component_build = false
+
+skia_use_direct3d = true
+skia_use_gl = false
+skia_use_vulkan = false
+skia_use_metal = false
+
+skia_use_harfbuzz = false
+skia_use_icu = false
+skia_use_icu4x = false
+skia_use_libgrapheme = false
+skia_use_client_icu = false
+skia_use_freetype = false
+skia_use_fontconfig = false
+skia_use_expat = false
+
+# 코덱이다. png만 여기 없다 — libpng와 rust 중 어느 것으로 세울지는
+# png-libpng.gn·png-rust.gn 중 하나를 이 파일 뒤에 이어 붙여 정한다
+# (build_skia.ps1의 -RustPng). zlib도 그쪽에 있다: libpng만 zlib을 쓴다.
+#
+# system_* 을 명시하는 이유는 harfbuzz·icu와 같다 — 기본값이
+# is_official_build이라 Release에서 저절로 켜지고 Linux 경로를 참조해 실패한다.
+skia_use_libjpeg_turbo_decode = true
+skia_use_libjpeg_turbo_encode = true
+skia_use_system_libjpeg_turbo = false
+skia_use_no_jpeg_encode = false
+skia_use_libwebp_decode = true
+skia_use_libwebp_encode = true
+skia_use_system_libwebp = false
+skia_use_no_webp_encode = false
+# gif는 wuffs가 디코드한다.
+skia_use_wuffs = true
+# raw(dng)는 쓰지 않는다. 기본값이
+# `skia_use_libjpeg_turbo_decode && skia_use_zlib`이라 jpeg를 켠 지금
+# 명시하지 않으면 dng_sdk·piex external이 따라 들어온다.
+skia_use_dng_sdk = false
+skia_use_piex = false
+skia_use_lua = false
+# gainmap은 expat(xml)을 끌어온다. 기본값이 is_skia_dev_build라 Debug에서 켜진다.
+skia_use_jpeg_gainmaps = false
+
+skia_enable_pdf = false
+skia_enable_svg = false
+skia_enable_skottie = false
+skia_enable_graphite = false
+skia_enable_tools = false
+skia_enable_android_utils = false
+skia_enable_spirv_validation = false
+skia_enable_gpu_debug_layers = false
+
+extra_cflags = [ "/MTd" ]

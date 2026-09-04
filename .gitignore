@@ -1,0 +1,5 @@
+# 브라우저로 받은 gn·ninja·bazelisk를 두는 자리다.
+/third_party/skia-tools/
+# pack_skia.ps1이 만드는 패키지와 배포용 zip이다.
+# 산출물은 추적하지 않는다 — 릴리스 자산으로 나간다.
+/build/

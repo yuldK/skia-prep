@@ -1,0 +1,14 @@
+* text=auto
+
+*.gn text eol=crlf
+*.json text eol=crlf
+*.md text eol=crlf
+*.ps1 text eol=crlf
+.gitignore text eol=crlf
+
+# patch 파일은 LF를 유지해야 `git apply`가 성립한다.
+*.patch -text
+
+# submodule로 가져오는 제3자 소스는 정규화하지 않는다.
+/third_party/skia/** -text
+/third_party/skia-externals/** -text
