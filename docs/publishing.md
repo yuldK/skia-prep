@@ -86,8 +86,23 @@ gh release create skia-152-0873ec164a06 `
     --notes-file build\skia-package\VERSION.json
 ```
 
-GitHub이 아닌 자리(사내 파일 서버 등)에 올려도 된다. 소비자 쪽이 보는 것은 URL
-하나뿐이다.
+`gh`가 없으면 GitHub의 릴리스 화면에서 zip 둘을 끌어다 놓아도 된다. 릴리스 자산은
+파일 하나에 2 GB까지라 204 MB짜리 Debug도 그대로 올라간다.
+
+```powershell
+winget install GitHub.cli
+```
+
+자산이 놓이는 자리는 태그로 정해진다.
+
+```
+https://github.com/yuldK/skia-prep/releases/download/<태그>/<파일 이름>
+```
+
+**저장소가 공개여야 한다.** 소비자의 `fetch_skia.ps1`은 인증 없이 내려받는다.
+
+GitHub이 아닌 자리(사내 파일 서버 등)에 올려도 된다. 소비자 쪽이 보는 것은
+`asset_base_url` 하나뿐이다.
 
 ## 6. 소비자 핀 갱신
 
@@ -96,7 +111,7 @@ GitHub이 아닌 자리(사내 파일 서버 등)에 올려도 된다. 소비자
 ```json
 {
     "tag": "skia-152-0873ec164a06",
-    "asset_base_url": "<자산이 놓인 자리>",
+    "asset_base_url": "https://github.com/yuldK/skia-prep/releases/download/skia-152-0873ec164a06",
     "png_codec": "rust",
     "skia_commit": "0873ec164a06966b90ae0d43ef783cfb180084ae",
     "assets": {
