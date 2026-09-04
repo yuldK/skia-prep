@@ -4,8 +4,9 @@
 
 이유는 rust png다. Skia의 rust 코덱은 Bazel로 서고, bazel이 hermetic clang과 Windows
 SDK 묶음까지 받아 캐시가 15 GB까지 자란다. GitHub의 호스팅 Windows 러너는 SSD가
-14 GB뿐이라 그 구성이 들어가지 않는다. libpng 갈래만이라면 CI로도 되지만, 갈래에 따라
-발행 경로가 갈리는 것보다 하나로 두는 편이 낫다.
+14 GB뿐이라 그 구성이 들어가지 않는다. 그리고 **발행하는 것은 rust 갈래다** —
+skia-ui가 `skia_use_rust_png_decode=true`를 요구 인자로 못 박았고, APNG를 읽는 코덱이
+그것뿐이다.
 
 ## 1. 준비
 
@@ -36,14 +37,12 @@ winget install Bazel.Bazelisk
 두 구성을 **같은 png 갈래로** 세운다. 갈래가 어긋나면 소비자의 configure가 거른다.
 
 ```powershell
-# APNG를 읽는 갈래 (bazelisk 필요)
 scripts\build_skia.ps1 -Configuration Release -RustPng
 scripts\build_skia.ps1 -Configuration Debug   -RustPng
-
-# 또는 추가 도구가 없는 갈래 (APNG는 정지 이미지로 나온다)
-scripts\build_skia.ps1 -Configuration Release
-scripts\build_skia.ps1 -Configuration Debug
 ```
+
+`-RustPng`을 빼면 libpng 갈래가 선다. **발행하는 것은 그쪽이 아니다** — 물러설
+자리로만 둔다 (README). 그쪽으로 만든 zip은 이름에 `-libpng`이 붙어 구별된다.
 
 ## 3. 검증
 
@@ -63,7 +62,7 @@ scripts\pack_skia.ps1 -Configuration Debug -Destination build\skia-package-debug
 구성마다 zip이 하나씩 나온다. 헤더와 고지는 양쪽에 같은 것이 들어 있고, 소비자의
 `fetch_skia.ps1`이 둘을 한 루트로 합친다.
 
-실측(Skia 152, rust 갈래):
+실측 (Skia 152):
 
 | 자산 | 압축 | 푼 뒤 |
 | --- | --- | --- |
@@ -72,7 +71,7 @@ scripts\pack_skia.ps1 -Configuration Debug -Destination build\skia-package-debug
 
 `pack_skia.ps1`은 각 zip의 SHA-256을 마지막에 찍는다. **그 값이 다음 단계에 필요하다.**
 
-rust 갈래에서 crate 고지를 걷지 못하면 스크립트는 **멈춘다.** 고지 없이 배포하지
+crate 고지를 걷지 못하면 스크립트는 **멈춘다.** 고지 없이 배포하지
 않는 것이 이 스크립트의 목적 중 하나다.
 
 ## 5. 릴리스
@@ -81,9 +80,9 @@ rust 갈래에서 crate 고지를 걷지 못하면 스크립트는 **멈춘다.*
 
 ```powershell
 gh release create skia-152-0873ec164a06 `
-    build\skia-prep-0873ec164a06-win-x64-rust-release.zip `
-    build\skia-prep-0873ec164a06-win-x64-rust-debug.zip `
-    --title "Skia 152 (0873ec164a06) win-x64, rust png" `
+    build\skia-prep-0873ec164a06-win-x64-release.zip `
+    build\skia-prep-0873ec164a06-win-x64-debug.zip `
+    --title "Skia 152 (0873ec164a06) win-x64" `
     --notes-file build\skia-package\VERSION.json
 ```
 

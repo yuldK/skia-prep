@@ -101,7 +101,9 @@ function Get-FileHashText {
 }
 
 # 어느 png 코덱으로 세운 빌드인지는 args.gn이 말한다.
-# cmake/dependencies/skia.cmake의 skia_ui_detect_skia_png_codec과 같은 판정이다.
+# 발행하는 것은 rust 갈래뿐이지만 libpng 갈래는 물러설 자리로 남아 있으므로
+# (skia-prep의 README) 여기서는 둘 다 만들 수 있어야 한다.
+# 소비자 쪽은 rust를 요구 인자로 못 박아 이 판정을 하지 않는다.
 function Get-PngCodec {
     param([string]$arguments_file)
 
@@ -447,7 +449,14 @@ Write-Output ('Package: {0} ({1:N1} MB)' -f $package_root, ($package_size / 1MB)
 if ($Archive) {
     $suffix = if ($skia_commit) { $skia_commit.Substring(0, 12) } else { 'unknown' }
     $flavour = ($configurations | ForEach-Object { $_.ToLowerInvariant() }) -join '-'
-    $archive_name = 'skia-prep-{0}-win-x64-{1}-{2}.zip' -f $suffix, $png_codec, $flavour
+    # png 갈래는 이름에 넣지 **않는다** — 발행하는 것은 rust 코덱 갈래 하나뿐이고
+    # (skia-ui의 SKIA_UI_SKIA_REQUIRED_ARGUMENTS가 그것을 요구한다), 소비자에게
+    # 고를 것이 없는 값을 파일 이름에 담아 봐야 "Rust로 빌드한 Skia"로 오해될 뿐이다.
+    #
+    # libpng 갈래는 물러설 자리로만 남아 있다. 그쪽으로 만들면 이름이 갈려야 한다 —
+    # 같은 Skia commit에서 서로 링크 호환되지 않는 두 패키지가 나오기 때문이다.
+    $codec_part = if ($png_codec -eq 'rust') { '' } else { "-$png_codec" }
+    $archive_name = 'skia-prep-{0}-win-x64{1}-{2}.zip' -f $suffix, $codec_part, $flavour
     $archive_path = Join-Path (Split-Path -Parent $package_root) $archive_name
     if (Test-Path -LiteralPath $archive_path) {
         Remove-Item -LiteralPath $archive_path -Force

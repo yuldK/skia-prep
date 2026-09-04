@@ -49,22 +49,28 @@ git submodule update --init third_party/skia-externals/libpng
 git submodule update --init third_party/skia-externals/zlib
 ```
 
-`libpng`과 `zlib`은 기본(libpng) 갈래에만 필요하다. `harfbuzz`·`libgrapheme`·
-`unicodetools`·`icu`는 텍스트 구성에서만 쓰며, 작업 트리가 3.3 GB라 평소에는 받지
-않는다.
+`libpng`과 `zlib`은 **물러설 자리인 libpng 갈래**에만 필요하다.
+`harfbuzz`·`libgrapheme`·`unicodetools`·`icu`는 텍스트 구성에서만 쓰며, 작업 트리가
+3.3 GB라 평소에는 받지 않는다.
 
 ```powershell
-scripts\build_skia.ps1 -Configuration Release
-scripts\build_skia.ps1 -Configuration Debug
+scripts\build_skia.ps1 -Configuration Release -RustPng
+scripts\build_skia.ps1 -Configuration Debug   -RustPng
 scripts\verify_skia_root.ps1
 scripts\pack_skia.ps1 -Configuration Release -Archive
 scripts\pack_skia.ps1 -Configuration Debug -Destination build\skia-package-debug -Archive
 ```
 
-APNG(움직이는 png)를 읽는 패키지를 만들려면 두 `build_skia.ps1`에 모두 `-RustPng`을
-준다. 그쪽은 bazelisk가 필요하고 캐시가 15 GB까지 자라므로 **GitHub Actions의 호스팅
-러너(SSD 14 GB)에서는 세울 수 없다.** 그래서 이 저장소는 CI로 발행하지 않고 생산자가
-자기 기계에서 빌드해 릴리스를 올린다.
+**`-RustPng`이 발행하는 갈래다.** skia-ui가 그것을 요구 인자로 못 박았다 —
+APNG(움직이는 png)를 읽는 코덱이 rust뿐이기 때문이다. 그쪽은 bazelisk가 필요하고
+캐시가 15 GB까지 자라므로 **GitHub Actions의 호스팅 러너(SSD 14 GB)에서는 세울 수
+없다.** 그래서 이 저장소는 CI로 발행하지 않고 생산자가 자기 기계에서 빌드해 릴리스를
+올린다.
+
+`-RustPng` 없이 세우는 libpng 갈래는 **물러설 자리로만** 남겨 둔다. Skia의 rust
+경로는 148~151에서 서지 않았고(152가 고쳤다) 뒷날 다시 막힐 수 있다. 그때 이쪽으로
+패키지를 만들고 skia-ui에서 요구 인자 한 줄을 뺀다. 그 갈래의 zip은 이름에
+`-libpng`이 붙어 rust 갈래와 구별된다 — 서로 링크 호환되지 않는다.
 
 발행 절차는 [docs/publishing.md](docs/publishing.md)에 있다.
 
