@@ -5,7 +5,9 @@
 [CmdletBinding()]
 param(
     [string]$SkiaRoot,
-    [string[]]$Configurations = @('Debug', 'Release')
+    [string[]]$Configurations = @('Debug', 'Release'),
+    # build_skia.ps1의 -OutputSuffix와 같은 값이다.
+    [string]$OutputSuffix
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,7 +36,55 @@ $required_arguments = @(
     @{ name = 'skia_use_libjpeg_turbo_decode'; reason = 'jpeg decoding' },
     @{ name = 'skia_use_libwebp_decode'; reason = 'webp decoding, still and animated' },
     @{ name = 'skia_use_wuffs'; reason = 'gif decoding' })
+# 반드시 꺼져 있어야 하는 것들이다. 둘 다 clang에서만 실물이 되고, 켜지면
+# 소비자와 어긋난다 — is_trivial_abi는 ABI를(MSVC 소비자에게 그 속성이 없다),
+# skia_use_partition_alloc은 external과 raw_ptr 구현을 바꾼다.
+# 뒤엣것은 **기본값이 is_clang이라 명시하지 않으면 저절로 켜진다.**
+$forbidden_arguments = @(
+    @{ name = 'is_trivial_abi'; reason = 'would change the ABI seen by MSVC consumers' },
+    @{ name = 'skia_use_partition_alloc'; reason = 'defaults to is_clang; pulls in a new external' })
 $failures = [System.Collections.Generic.List[string]]::new()
+
+# clang-cl이 낸 object인지 정적으로 판정한다.
+#
+# args.gn의 clang_win은 "그렇게 gen했다"는 말일 뿐 산출물의 사실이 아니고,
+# CRT 지시문은 두 도구사슬이 똑같이 낸다(그것이 이 조합의 요점이다). 실제로
+# 무엇이 컴파일했는지를 아카이브 자신에게 묻는 자리가 필요하다.
+#
+# .llvm_addrsig는 clang이 -faddrsig(기본값)로 내는 LLVM 고유 section이다.
+# 이름이 여덟 자를 넘어 COFF 문자열 테이블에 그대로 들어가므로, 바이트를 훑는
+# 것만으로 판정된다 — dumpbin도 필요 없고 32 MB에 50 ms면 끝난다.
+Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+
+public static class SkiaArchiveMarker {
+    public static bool Contains(string path, string needle) {
+        byte[] pattern = System.Text.Encoding.ASCII.GetBytes(needle);
+        using (FileStream file = File.OpenRead(path)) {
+            byte[] buffer = new byte[1 << 20];
+            int carry = pattern.Length - 1;
+            int offset = 0;
+            int read;
+            while ((read = file.Read(buffer, offset, buffer.Length - offset)) > 0) {
+                int total = offset + read;
+                for (int i = 0; i + pattern.Length <= total; i++) {
+                    int j = 0;
+                    while (j < pattern.Length && buffer[i + j] == pattern[j]) { j++; }
+                    if (j == pattern.Length) { return true; }
+                }
+                if (total >= carry) {
+                    Array.Copy(buffer, total - carry, buffer, 0, carry);
+                    offset = carry;
+                } else {
+                    offset = total;
+                }
+            }
+        }
+        return false;
+    }
+}
+'@
 
 function Add-Result {
     param([string]$item, [bool]$ok, [string]$detail)
@@ -95,7 +145,8 @@ $dumpbin = Find-Dumpbin
 
 foreach ($configuration in $Configurations) {
     Write-Output ''
-    $directory = Join-Path $SkiaRoot ('out\skia-ui-{0}' -f $configuration.ToLowerInvariant())
+    $directory = Join-Path $SkiaRoot `
+        ('out\skia-ui-{0}{1}' -f $configuration.ToLowerInvariant(), $OutputSuffix)
     Write-Output "-- $configuration : $directory"
 
     # png 코덱을 먼저 정한다 — 요구할 산출물이 그것으로 갈린다.
@@ -151,22 +202,68 @@ foreach ($configuration in $Configurations) {
             default { 'no png decoder' }
         }
         Add-Result "$configuration/png codec" ($png_codec -in @('libpng', 'rust')) $png_detail
+
+        foreach ($forbidden in $forbidden_arguments) {
+            Add-Result "$configuration/$($forbidden.name)" `
+                (-not ($arguments_text -match ('{0}\s*=\s*true' -f $forbidden.name))) `
+                ('must stay false — ' + $forbidden.reason)
+        }
+        # 도구사슬이다. 이 저장소가 발행하는 것은 clang-cl 갈래 하나뿐이다.
+        # MSVC로 세운 Skia도 링크는 되지만 CPU 래스터 파이프라인이 폭 1의
+        # scalar 경로로 돌아, 소비자가 받는 물건으로는 다른 것이다
+        # (docs/skia-build.md 5.4).
+        $clang_win = if ($arguments_text -match 'clang_win\s*=\s*"([^"]+)"') { $Matches[1] } else { '' }
+        Add-Result "$configuration/toolchain arg" ([bool]$clang_win) `
+            $(if ($clang_win) { "clang_win = $clang_win" }
+                else { 'clang_win is not set; this was built with MSVC (-Toolchain msvc)' })
     }
     else {
         Add-Result "$configuration/args.gn" $false 'missing'
     }
 
+    # args.gn은 "그렇게 gen했다"는 말이다. 아카이브 자신에게 무엇이 컴파일했는지
+    # 묻는 자리가 따로 있어야 한다 — .llvm_addrsig가 clang만 내는 section이다.
+    $archive = Join-Path $directory 'skia.lib'
+    if (Test-Path -LiteralPath $archive) {
+        $built_by_clang = [SkiaArchiveMarker]::Contains($archive, '.llvm_addrsig')
+        Add-Result "$configuration/built by clang-cl" $built_by_clang `
+            $(if ($built_by_clang) { 'skia.lib carries LLVM sections' }
+                else { 'no LLVM sections; the raster pipeline is the scalar path' })
+    }
+
+    # 무엇으로 세웠는지를 build_skia.ps1이 적어 둔 자리다. 없어도 위의 두 검사가
+    # 판정을 마치므로 실패로 보지 않는다 — 옛 산출 디렉터리에는 이 파일이 없다.
+    $toolchain_file = Join-Path $directory 'toolchain.json'
+    if (Test-Path -LiteralPath $toolchain_file -PathType Leaf) {
+        $toolchain = Get-Content -Raw -LiteralPath $toolchain_file | ConvertFrom-Json
+        Write-Output ("[    ] {0,-42} {1}" -f "$configuration/toolchain.json",
+            ('{0} {1}, MSVC {2}, Windows SDK {3}' -f $toolchain.compiler,
+                $toolchain.compiler_version, $toolchain.msvc_version, $toolchain.windows_sdk))
+    }
+
     # 정적 CRT가 skia-ui와 어긋나면 LNK2038로 드러난다.
     # 미리 잡는다.
+    #
+    # 이름이 두 가지다. MSVC의 CRT 헤더는 `LIBCMT`를 pragma로 심고, clang-cl은
+    # /MT를 보고 스스로 `libcmt.lib`를 심는다. 가리키는 라이브러리는 같은 것이므로
+    # 확장자를 선택으로 둔다 — 그러지 않으면 clang 갈래가 여기서 헛되이 걸린다.
+    # 함께 보는 FAILIFMISMATCH는 두 도구사슬이 똑같이 내는 값이고, 링커가 실제로
+    # 대조하는 것도 그쪽이다.
     $library = Join-Path $directory 'skia.lib'
     if ($dumpbin -and (Test-Path -LiteralPath $library)) {
         $expected = if ($configuration -eq 'Debug') { 'LIBCMTD' } else { 'LIBCMT' }
+        $expected_runtime = if ($configuration -eq 'Debug') { 'MTd_StaticDebug' } else { 'MT_StaticRelease' }
+        $expected_iterator = if ($configuration -eq 'Debug') { '2' } else { '0' }
         $directives = & $dumpbin /directives $library 2>$null |
-            Select-String 'DEFAULTLIB' |
+            Select-String 'DEFAULTLIB|FAILIFMISMATCH' |
             ForEach-Object { $_.Line.Trim() } |
             Sort-Object -Unique
-        $matched = $directives | Where-Object { $_ -match "/DEFAULTLIB:$expected$" }
+        $matched = $directives | Where-Object { $_ -match "/DEFAULTLIB:$expected(\.lib)?$" }
         Add-Result "$configuration/static CRT" ([bool]$matched) "expects /DEFAULTLIB:$expected"
+        $runtime_ok = $directives | Where-Object { $_ -match "RuntimeLibrary=$expected_runtime$" }
+        $iterator_ok = $directives | Where-Object { $_ -match "_ITERATOR_DEBUG_LEVEL=$expected_iterator$" }
+        Add-Result "$configuration/skia.lib C++ ABI" ([bool]$runtime_ok -and [bool]$iterator_ok) `
+            "expects iterator $expected_iterator, $expected_runtime"
     }
 
     # Bazel의 Windows C++ toolchain은 dbg에서도 기본이 release CRT다. rust png

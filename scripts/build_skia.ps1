@@ -14,6 +14,18 @@
 #   기본     : libpng(C). 추가 도구가 없다.
 #   -RustPng : rust 코덱. APNG(움직이는 png)를 읽는 유일한 길이고 bazelisk가 필요하다.
 # 나머지 코덱(jpeg-turbo·webp·gif)은 두 경우 모두 켜진다.
+#
+# Skia 자신을 컴파일하는 것은 **clang-cl이 기본이다** (-Toolchain msvc로 되돌린다).
+# 이유는 CPU 래스터 파이프라인의 처리 폭 하나다. src/opts/SkRasterPipeline_opts.h가
+# 벡터를 clang·gcc의 확장(ext_vector_type)으로만 만들고, 그 둘이 아니면
+# SKRP_CPU_SCALAR로 떨어져 한 번에 픽셀 하나를 처리한다. MSVC로 세운 Skia는
+# /arch:AVX2로 컴파일되는 SkOpts_ml3.cpp까지 포함해 전부 그 scalar 경로다.
+# clang-cl로 세우면 기본이 SSE2(폭 4)이고, SkOpts::Init()의 실행 시점 판정이
+# AVX2를 지원하는 CPU에서 ml3 갈래(폭 8)로 바꿔 끼운다.
+#
+# 소비자는 여전히 MSVC로 빌드한다. 그 경계가 성립하는 것은 clang-cl이 MSVC의
+# 헤더와 CRT를 그대로 쓰고(-imsvc), is_trivial_abi를 false로 못 박기 때문이다
+# (third_party/skia-args의 그 줄과 docs/skia-build.md 5.4).
 
 [CmdletBinding()]
 param(
@@ -21,6 +33,12 @@ param(
     [string]$Configuration = 'Release',
     [string]$SkiaRoot,
     [string]$ArgumentFile,
+    [ValidateSet('clang', 'msvc')]
+    [string]$Toolchain = 'clang',
+    [string]$ClangPath,
+    # 산출 디렉터리 이름 뒤에 붙는다. 같은 Skia 트리에서 두 도구사슬의 산출물을
+    # 나란히 두고 비교할 때 쓴다: -Toolchain msvc -OutputSuffix '-msvc'.
+    [string]$OutputSuffix,
     [string]$GnPath,
     [string]$NinjaPath,
     [string]$PythonPath,
@@ -254,6 +272,147 @@ function Resolve-Python {
     throw 'A real Python 3 interpreter was not found. Pass -PythonPath explicitly.'
 }
 
+# Skia의 GN은 clang_win 하나로 Windows 도구사슬을 통째로 바꾼다 —
+# cl.exe -> clang-cl.exe, lib.exe/link.exe -> lld-link.exe (gn/toolchain/BUILD.gn).
+# 그리고 clang_win_version은 $clang_win/lib/clang의 최신 디렉터리에서 스스로 구한다.
+# 그러므로 여기서 정할 것은 **LLVM 루트 하나**다.
+#
+# 첫 자리가 win_vc 옆의 clang인 이유는 ABI다. clang-cl은 자기 STL을 들고 오지
+# 않고 -imsvc로 MSVC의 헤더를 읽으며, 링크되는 CRT도 그 MSVC의 것이다
+# (gn/skia/BUILD.gn의 _include_dirs·lib_dirs). Skia가 컴파일에 쓰는 MSVC를 고르는
+# 것은 gn/find_msvc.py이므로, 그것이 고른 VC 안의 clang을 먼저 본다 — 헤더와
+# 컴파일러가 같은 설치본에서 나온다.
+function Get-MsvcDirectory {
+    $script_path = Join-Path $skia_root 'gn\find_msvc.py'
+    if (-not (Test-Path -LiteralPath $script_path -PathType Leaf)) {
+        return ''
+    }
+    try {
+        $found = & $python $script_path
+    }
+    catch {
+        return ''
+    }
+    if ($LASTEXITCODE -ne 0 -or -not $found) {
+        return ''
+    }
+    return ("$found" | Select-Object -First 1).Trim()
+}
+
+function Get-VisualStudioClangPath {
+    $program_files = ${env:ProgramFiles(x86)}
+    if (-not $program_files) {
+        return @()
+    }
+    $vswhere = Join-Path $program_files 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+        return @()
+    }
+    try {
+        $installations = & $vswhere -products '*' -prerelease -property installationPath
+    }
+    catch {
+        return @()
+    }
+    if ($LASTEXITCODE -ne 0 -or -not $installations) {
+        return @()
+    }
+    return @($installations |
+        Where-Object { $_ } |
+        ForEach-Object { Join-Path $_ 'VC\Tools\Llvm\x64' })
+}
+
+# 루트로 성립하는지는 셋으로 본다. clang-cl과 lld-link는 toolchain이 부르는
+# 실행 파일이고, lib/clang/<판번>은 BUILDCONFIG가 clang_win_version을 읽는 자리다.
+# 셋 중 하나라도 없으면 gn gen은 통과하고 ninja가 첫 컴파일에서 죽는다.
+function Test-ClangWinRoot {
+    param([string]$root)
+
+    foreach ($relative in @('bin\clang-cl.exe', 'bin\lld-link.exe')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $root $relative) -PathType Leaf)) {
+            return $false
+        }
+    }
+    $versions = Join-Path $root 'lib\clang'
+    if (-not (Test-Path -LiteralPath $versions -PathType Container)) {
+        return $false
+    }
+    return [bool](Get-ChildItem -LiteralPath $versions -Directory -ErrorAction SilentlyContinue)
+}
+
+function Resolve-ClangWin {
+    if ($ClangPath) {
+        if (-not (Test-Path -LiteralPath $ClangPath -PathType Container)) {
+            throw "-ClangPath was not found: $ClangPath"
+        }
+        $given = (Resolve-Path -LiteralPath $ClangPath).Path
+        # bin을 가리켜도 받아 준다. 사람이 clang-cl.exe를 찾아간 자리가 그쪽이다.
+        if (-not (Test-ClangWinRoot -root $given)) {
+            $parent = Split-Path -Parent $given
+            if ($parent -and (Test-ClangWinRoot -root $parent)) {
+                return $parent
+            }
+            throw @"
+-ClangPath is not an LLVM root: $given
+It must be the directory that holds bin\clang-cl.exe, bin\lld-link.exe and
+lib\clang\<version>.
+"@
+        }
+        return $given
+    }
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    # 1. 브라우저로 받아 둔 자리. gn·ninja와 같은 규칙이다.
+    $candidates.Add((Join-Path $tool_directory 'llvm'))
+    # 2. Skia가 헤더와 CRT를 읽을 MSVC 옆의 clang.
+    $msvc = Get-MsvcDirectory
+    if ($msvc) {
+        $candidates.Add((Join-Path $msvc 'Tools\Llvm\x64'))
+    }
+    # 3. 다른 Visual Studio 설치본.
+    foreach ($path in (Get-VisualStudioClangPath)) {
+        $candidates.Add($path)
+    }
+    # 4. 따로 설치한 LLVM.
+    foreach ($program_files in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ($program_files) {
+            $candidates.Add((Join-Path $program_files 'LLVM'))
+        }
+    }
+    # 5. PATH의 clang-cl.exe. 그 자리에서 bin을 한 단계 올라간 것이 루트다.
+    $command = Get-Command -Name 'clang-cl' -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($command) {
+        $candidates.Add((Split-Path -Parent (Split-Path -Parent $command.Source)))
+    }
+
+    foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+        if ((Test-Path -LiteralPath $candidate -PathType Container) -and
+            (Test-ClangWinRoot -root $candidate)) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+
+    $searched = ($candidates | Where-Object { $_ } | Select-Object -Unique) -join "`n  "
+    throw @"
+-Toolchain clang needs clang-cl.exe, and no LLVM root was found. Searched:
+  $searched
+
+An LLVM root is the directory holding bin\clang-cl.exe, bin\lld-link.exe and
+lib\clang\<version>.
+
+Do one of these:
+  1. Install the Visual Studio component "C++ Clang tools for Windows".
+     It lands in <VS>\VC\Tools\Llvm\x64 and needs nothing else.
+  2. Install LLVM for Windows from releases.llvm.org (or winget install LLVM.LLVM)
+     and pass -ClangPath if it is not in Program Files.
+  3. Unpack one into: $(Join-Path $tool_directory 'llvm')
+  4. Build with MSVC instead: -Toolchain msvc.
+     That works, but Skia's CPU raster pipeline then runs one pixel at a time -
+     src/opts/SkRasterPipeline_opts.h has no vector type for MSVC.
+"@
+}
+
 if (-not (Test-Path -LiteralPath (Join-Path $skia_root 'include\core\SkCanvas.h'))) {
     throw @"
 The Skia submodule is not initialized: $skia_root
@@ -385,10 +544,27 @@ if ($NinjaPath -and -not (Test-NinjaVersion -path $ninja)) {
     Write-Warning "The given ninja is older than $minimum_ninja_version or reported no version: $ninja"
 }
 
+# 도구사슬은 args 뒤에 한 줄을 덧붙이는 것으로 정해진다.
+# GN 문자열에서 역슬래시는 이스케이프 문자이므로 슬래시로 바꿔 넘긴다 —
+# clang-cl과 lld-link는 Windows에서도 슬래시 경로를 그대로 받는다.
+$clang_win = ''
+$compiler_version = ''
+if ($Toolchain -eq 'clang') {
+    $clang_win = Resolve-ClangWin
+    $compiler_version = (& (Join-Path $clang_win 'bin\clang-cl.exe') --version |
+        Select-Object -First 1).Trim()
+    $argument_text += "`nclang_win = `"{0}`"`n" -f ($clang_win -replace '\\', '/')
+}
+
 Write-Output "Skia root      : $skia_root"
 Write-Output "Configuration  : $Configuration"
 Write-Output "Argument file  : $ArgumentFile"
 Write-Output "png codec      : $png_flavor ($png_argument_file)"
+Write-Output "toolchain      : $Toolchain"
+if ($clang_win) {
+    Write-Output "clang_win      : $clang_win"
+    Write-Output "clang-cl       : $compiler_version"
+}
 if ($bazelisk) {
     Write-Output "bazelisk       : $bazelisk"
 }
@@ -485,7 +661,8 @@ else {
 #    그 아래 인자가 통째로 사라진다. 사라진 인자는 오류가 아니라 **Skia의 기본값**이
 #    되므로(코덱은 기본이 켜짐·system 라이브러리) 링크나 컴파일이 엉뚱한 자리에서
 #    깨진다. 값에 `#`을 쓰는 인자는 없다.
-$output_directory = Join-Path $skia_root ('out\skia-ui-{0}' -f $Configuration.ToLowerInvariant())
+$output_directory = Join-Path $skia_root `
+    ('out\skia-ui-{0}{1}' -f $Configuration.ToLowerInvariant(), $OutputSuffix)
 $flat_arguments = (($argument_text -split "`r?`n") |
     ForEach-Object { ($_ -replace '(^|\s)#.*$', '').Trim() } |
     Where-Object { $_ }) -join ' '
@@ -511,6 +688,45 @@ finally {
     Pop-Location
 }
 
+# 5. toolchain.json.
+#    args.gn을 산출물 옆에 함께 싣는 것이 이 저장소의 구성 계약이다. 그런데
+#    args.gn은 **무엇으로 컴파일했는지를 적지 못한다** — clang_win은 이 기계의
+#    경로일 뿐이고, MSVC와 Windows SDK의 판번은 GN이 스스로 찾아 args에 남지도
+#    않는다. 같은 Skia commit에서 나온 두 패키지를 나중에 구별할 근거가 필요하므로
+#    (재빌드마다 패키지 판번을 새로 붙이는 이유가 그것이다) 실제로 쓴 도구사슬을
+#    여기서 적어 둔다. gn이 방금 만든 ninja 파일이 그 사실을 들고 있다.
+#    gn args --list로는 답이 나오지 않는다. win_toolchain_version과 win_sdk_version은
+#    declare_args의 기본값이 ""이고 실제 값은 BUILDCONFIG가 그 뒤에 계산해 넣기
+#    때문이다 — 그 계산 결과가 남는 자리는 컴파일 명령뿐이다. gn이 경로 안의
+#    공백과 콜론을 `$ `·`$:`로 escape하므로 구분자만 느슨하게 본다.
+$generated = @('toolchain.ninja', 'build.ninja', 'obj\core.ninja') |
+    ForEach-Object { Join-Path $output_directory $_ } |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    ForEach-Object { Get-Content -Raw -LiteralPath $_ }
+$generated = $generated -join "`n"
+$msvc_version = if ($generated -match 'Tools[/\\]MSVC[/\\]([0-9.]+)') { $Matches[1] } else { '' }
+$sdk_version = if ($generated -match 'Kits[/\\]10[/\\]Include[/\\]([0-9.]+)') { $Matches[1] } else { '' }
+$toolchain_record = [ordered]@{
+    schema           = 1
+    toolchain        = $Toolchain
+    compiler         = if ($Toolchain -eq 'clang') { 'clang-cl' } else { 'cl' }
+    compiler_version = $compiler_version
+    linker           = if ($Toolchain -eq 'clang') { 'lld-link' } else { 'link' }
+    clang_win        = $clang_win
+    msvc_version     = $msvc_version
+    windows_sdk      = $sdk_version
+    configuration    = $Configuration
+    png_codec        = $png_flavor
+    built_at         = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+}
+if ($Toolchain -ne 'clang') {
+    $toolchain_record['compiler_version'] = "MSVC $msvc_version"
+}
+Set-Content -LiteralPath (Join-Path $output_directory 'toolchain.json') `
+    -Value ($toolchain_record | ConvertTo-Json -Depth 4) -Encoding UTF8
+
 Write-Output ''
 Write-Output "Skia build finished: $output_directory"
+Write-Output ("toolchain      : {0} ({1}), MSVC {2}, Windows SDK {3}" -f `
+        $toolchain_record.compiler, $toolchain_record.compiler_version, $msvc_version, $sdk_version)
 Write-Output 'Verify it with: scripts\verify_skia_root.ps1'

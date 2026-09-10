@@ -4,6 +4,24 @@ is_official_build = false
 is_debug = true
 is_component_build = false
 
+# Skia 자신을 무엇으로 컴파일하는가는 build_skia.ps1의 -Toolchain이 정한다
+# (clang_win 인자를 이 args 뒤에 덧붙인다). 아래 한 줄은 그 선택과 무관하게
+# **언제나 false여야 한다.**
+#
+# is_trivial_abi = true는 clang에서만 SK_TRIVIAL_ABI=[[clang::trivial_abi]]로
+# 펼쳐져 sk_sp 같은 형의 호출 규약을 바꾼다. MSVC로 컴파일되는 소비자에게는
+# 그 속성이 없어 같은 형이 서로 다른 ABI가 되고, 링크는 성립한 채 런타임에
+# 깨진다. MSVC로 세우던 동안에는 값이 무엇이든 무해했으므로 이 줄이 필요
+# 없었다 — clang으로 세우는 지금부터 계약이다 (docs/skia-build.md 5.4).
+is_trivial_abi = false
+
+# 기본값이 is_clang이다. 도구사슬을 clang으로 바꾸는 것만으로 저절로 켜져
+# third_party/externals/partition_alloc external을 새로 요구하고
+# (없으면 gn gen이 거기서 죽는다), Skia 안의 raw_ptr을 noop에서 실물
+# 검사 포인터로 바꾼다. 이 저장소가 바꾸려는 것은 컴파일러 하나뿐이므로
+# 끈다 — 새 external도, 새 제3자 고지도, 새 런타임 동작도 들이지 않는다.
+skia_use_partition_alloc = false
+
 skia_use_direct3d = true
 skia_use_gl = false
 skia_use_vulkan = false
