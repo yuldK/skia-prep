@@ -28,8 +28,14 @@ param(
     [string]$SkiaRoot,
     [ValidateSet('Debug', 'Release')]
     [string[]]$Configuration = @('Release'),
+    # build_skia.ps1의 -OutputSuffix와 같은 값이다. 읽는 자리만 바뀐다 —
+    # **패키지 안의 배치는 언제나 out/skia-ui-{구성}이다.** 소비자의 계약이 그것이다.
+    [string]$OutputSuffix,
     [string]$Destination,
     [switch]$Archive,
+    # 같은 Skia commit에서 나온 패키지를 구별하는 번호다. 자세한 것은 아래
+    # $package_revision의 주석에 있다.
+    [int]$PackageRevision,
     [string]$BazeliskPath,
     [string]$RustLicenseRoot,
     # include/third_party/ 는 vulkan·dawn 헤더 20.7 MB다.
@@ -68,6 +74,19 @@ $components = @(
     'libwebp.lib', 'libwebp_sse41.lib', 'wuffs.lib')
 $libpng_components = @('libpng.lib', 'zlib.lib')
 $rust_png_components = @('librust_png_ffi_rs.a', 'libcxx_cc.a')
+
+# 같은 Skia commit에서 나온 패키지를 구별하는 번호다.
+#
+# 태그와 자산 이름이 Skia의 commit만 담았던 동안에는, 소스가 같고 **빌드가 다른**
+# 두 패키지를 가리킬 이름이 없었다. 도구사슬을 바꾼 지금 그 일이 실제로 일어난다 —
+# 같은 0873ec16을 MSVC로 세운 것과 clang-cl로 세운 것은 성능이 다른 물건이다.
+#
+#   r1  MSVC. 태그·자산 이름에 번호가 없다 (이 번호를 붙이기 전에 발행했다).
+#   r2  clang-cl. CPU 래스터 파이프라인이 SIMD 경로로 선다.
+#
+# 다시 세울 이유(도구사슬 판번, GN args, 패치)가 생기면 하나 올린다. Skia commit이
+# 바뀌면 이름의 commit 부분이 바뀌므로 1로 되돌린다.
+$package_revision = 2
 
 $externals_root = Join-Path $skia_root 'third_party\externals'
 
@@ -269,11 +288,16 @@ The static archive links the Rust standard library, so its notice is required.
 # ---------------------------------------------------------------------------
 # 1. 구성별 산출물을 확인하고 png 갈래를 정한다.
 # ---------------------------------------------------------------------------
+if ($PackageRevision) {
+    $package_revision = $PackageRevision
+}
 $configurations = @($Configuration | Sort-Object -Unique)
 $builds = [System.Collections.Generic.List[hashtable]]::new()
 $png_codec = ''
+$toolchain_record = $null
 foreach ($name in $configurations) {
-    $build_directory = Join-Path $skia_root ('out\skia-ui-{0}' -f $name.ToLowerInvariant())
+    $build_directory = Join-Path $skia_root `
+        ('out\skia-ui-{0}{1}' -f $name.ToLowerInvariant(), $OutputSuffix)
     $arguments_file = Join-Path $build_directory 'args.gn'
     if (-not (Test-Path -LiteralPath $arguments_file -PathType Leaf)) {
         throw @"
@@ -281,6 +305,28 @@ The Skia $name build was not found: $build_directory
 Build it first: scripts\build_skia.ps1 -Configuration $name
 "@
     }
+
+    # 무엇으로 컴파일했는지다. build_skia.ps1이 적어 둔다.
+    # png 갈래와 같은 이유로 구성마다 어긋나면 안 된다 — 한 패키지 안의 Debug와
+    # Release가 서로 다른 컴파일러에서 나오면 소비자가 보는 성능이 구성에 따라
+    # 달라지고, 그것을 args.gn으로는 알 수 없다.
+    $toolchain_file = Join-Path $build_directory 'toolchain.json'
+    if (-not (Test-Path -LiteralPath $toolchain_file -PathType Leaf)) {
+        throw @"
+The Skia $name build has no toolchain.json: $build_directory
+It records which compiler produced these archives, and the package needs it.
+Re-run: scripts\build_skia.ps1 -Configuration $name
+"@
+    }
+    $toolchain = Get-Content -Raw -LiteralPath $toolchain_file | ConvertFrom-Json
+    if ($toolchain_record -and $toolchain.compiler_version -ne $toolchain_record.compiler_version) {
+        throw @"
+The Skia builds were made with different compilers
+(already seen: $($toolchain_record.compiler_version), $name : $($toolchain.compiler_version)).
+Build both with the same one.
+"@
+    }
+    $toolchain_record = $toolchain
 
     $codec = Get-PngCodec -arguments_file $arguments_file
     if ($png_codec -and $codec -ne $png_codec) {
@@ -305,6 +351,7 @@ Build it first: scripts\build_skia.ps1 -Configuration $name
             name      = $name
             directory = $build_directory
             arguments = $arguments_file
+            toolchain = $toolchain_file
             required  = $required
         })
 }
@@ -312,6 +359,9 @@ Build it first: scripts\build_skia.ps1 -Configuration $name
 Write-Output "Skia root      : $skia_root"
 Write-Output "Configurations : $($configurations -join ', ')"
 Write-Output "png codec      : $png_codec"
+Write-Output ("toolchain      : {0} ({1}), MSVC {2}, Windows SDK {3}" -f $toolchain_record.compiler,
+    $toolchain_record.compiler_version, $toolchain_record.msvc_version, $toolchain_record.windows_sdk)
+Write-Output "package rev    : r$package_revision"
 Write-Output "Destination    : $Destination"
 
 # ---------------------------------------------------------------------------
@@ -348,6 +398,22 @@ foreach ($build in $builds) {
     $target = Join-Path $package_root ('out\skia-ui-{0}' -f $build.name.ToLowerInvariant())
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     Copy-Item -LiteralPath $build.arguments -Destination $target -Force
+    # args.gn 옆에 toolchain.json도 싣는다. 소비자가 configure 시점에 읽는 구성
+    # 계약이 args.gn 하나였는데, 그것은 무엇으로 컴파일했는지를 적지 못한다.
+    #
+    # 그대로 베끼지 않고 `clang_win`을 뺀다. 그것은 **생산자 기계의 경로**이고,
+    # 소비자에게는 뜻이 없으며, LLVM을 사람 디렉터리에 둔 기계에서는 사용자
+    # 이름까지 공개 릴리스 자산에 실려 나간다. 컴파일러가 무엇이고 판번이
+    # 얼마인가는 남는다 — 소비자에게 필요한 것은 그쪽이다.
+    $build_toolchain = Get-Content -Raw -LiteralPath $build.toolchain | ConvertFrom-Json
+    $published = [ordered]@{}
+    foreach ($property in $build_toolchain.PSObject.Properties) {
+        if ($property.Name -ne 'clang_win') {
+            $published[$property.Name] = $property.Value
+        }
+    }
+    Set-Content -LiteralPath (Join-Path $target 'toolchain.json') `
+        -Value ($published | ConvertTo-Json -Depth 4) -Encoding UTF8
 
     $files = [ordered]@{}
     foreach ($component in ($build.required | Sort-Object)) {
@@ -446,7 +512,8 @@ if ($png_codec -eq 'rust') {
 }
 
 $version = [ordered]@{
-    schema                 = 1
+    schema                 = 2
+    package_revision       = $package_revision
     packaged_at            = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     skia                   = [ordered]@{
         commit    = $skia_commit
@@ -454,6 +521,16 @@ $version = [ordered]@{
         patches   = $patches
     }
     png_codec              = $png_codec
+    # 같은 Skia commit에서 나온 두 패키지를 가르는 것이 이것이다.
+    # commit만으로는 구별되지 않으므로 판번과 함께 적는다.
+    toolchain              = [ordered]@{
+        compiler         = $toolchain_record.compiler
+        compiler_version = $toolchain_record.compiler_version
+        linker           = $toolchain_record.linker
+        msvc_version     = $toolchain_record.msvc_version
+        windows_sdk      = $toolchain_record.windows_sdk
+        is_trivial_abi   = $false
+    }
     target                 = 'win-x64'
     include_vendor_headers = [bool]$IncludeVendorHeaders
     configurations         = $configuration_records
@@ -477,8 +554,13 @@ if ($Archive) {
     #
     # libpng 갈래는 물러설 자리로만 남아 있다. 그쪽으로 만들면 이름이 갈려야 한다 —
     # 같은 Skia commit에서 서로 링크 호환되지 않는 두 패키지가 나오기 때문이다.
+    #
+    # 판번은 **넣는다.** 같은 commit을 다시 세운 것이 서로 다른 물건일 수 있고
+    # (도구사슬이 바뀌면 그렇다), 소비자의 skia-prep.json이 파일 이름으로 고정하기
+    # 때문이다. r1은 번호를 붙이기 전에 발행한 MSVC 패키지라 이름에 번호가 없다.
     $codec_part = if ($png_codec -eq 'rust') { '' } else { "-$png_codec" }
-    $archive_name = 'skia-prep-{0}-win-x64{1}-{2}.zip' -f $suffix, $codec_part, $flavour
+    $archive_name = 'skia-prep-{0}-r{1}-win-x64{2}-{3}.zip' -f `
+        $suffix, $package_revision, $codec_part, $flavour
     $archive_path = Join-Path (Split-Path -Parent $package_root) $archive_name
     if (Test-Path -LiteralPath $archive_path) {
         Remove-Item -LiteralPath $archive_path -Force
