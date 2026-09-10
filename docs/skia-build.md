@@ -21,7 +21,25 @@ cmake --preset vs2026 `
 | `gn` | Skia 빌드 생성기. 스크립트가 로컬에서 찾는다 |
 | `ninja` | 1.13 이상. 스크립트가 로컬에서 찾는다 |
 | Python 3 | 3.9 이상. Skia의 GN 스크립트가 사용한다 |
+| `clang-cl` | **Skia를 컴파일하는 것이 이것이다** (5.4). Visual Studio의 "C++ Clang tools for Windows" 구성 요소면 된다. 스크립트가 로컬에서 찾는다 |
+| MSVC | 헤더와 CRT는 여전히 MSVC의 것을 쓴다. clang-cl이 `-imsvc`로 읽는다 (5.4) |
 | `bazelisk.exe` | **`-RustPng`을 줄 때만** 필요하다. 기본 구성에는 필요 없다. `.cmd`·`.ps1` launcher는 쓸 수 없다 (5.2) |
+
+`clang-cl`을 찾는 순서는 아래와 같다. Visual Studio에 Clang 구성 요소가 깔려 있으면
+대개 사용자가 할 일은 없다.
+
+| 순서 | 자리 |
+| --- | --- |
+| 1 | `-ClangPath` 인자 |
+| 2 | `third_party/skia-tools/llvm` |
+| 3 | `gn/find_msvc.py`가 고른 VC 안의 `Tools/Llvm/x64` |
+| 4 | 다른 Visual Studio 설치본의 같은 자리 (`vswhere`로 찾는다) |
+| 5 | `Program Files/LLVM` |
+| 6 | `PATH`의 `clang-cl.exe`에서 두 단계 올라간 자리 |
+
+3이 먼저인 것이 중요하다. clang-cl은 자기 표준 라이브러리를 들고 오지 않고 MSVC의
+헤더를 읽으므로, **Skia가 컴파일에 쓰는 MSVC와 같은 설치본의 clang**을 고르면 헤더와
+컴파일러가 어긋날 자리가 없다.
 
 `gn`과 `ninja`만 submodule 밖에 있다. 둘은 PATH에 없는 것이 보통이므로 `build_skia.ps1`이 아래 순서로 찾는다. 대개 사용자가 할 일은 없다.
 
@@ -82,6 +100,19 @@ git submodule update --init third_party/catch2
 ```powershell
 scripts\build_skia.ps1 -Configuration Release
 scripts\build_skia.ps1 -Configuration Debug
+```
+
+Skia 자신은 **clang-cl로 컴파일된다** (5.4). 헤더와 CRT는 MSVC의 것을 그대로 쓰므로
+소비자 쪽은 아무것도 바뀌지 않는다. MSVC로 세우려면 `-Toolchain msvc`를 준다. 그쪽은
+CPU 래스터 파이프라인이 폭 1의 scalar 경로로 서므로, 견주어 볼 때가 아니면 쓰지
+않는다.
+
+두 도구사슬의 산출물을 나란히 두려면 `-OutputSuffix`로 자리를 가른다. `bench_skia.ps1`이
+받는 것도 같은 값이다.
+
+```powershell
+scripts\build_skia.ps1 -Configuration Release -RustPng -Toolchain msvc -OutputSuffix '-msvc'
+scripts\bench_skia.ps1 -Configuration Release -Baseline '-msvc' -Candidate ''
 ```
 
 이미 준비해 둔 Skia 트리가 다른 자리에 있으면 `-SkiaRoot`로 가리킨다. CMake 쪽의
@@ -159,14 +190,29 @@ LNK2038로 실패한다.
 
 패치를 적용하면 Skia 작업 트리가 수정되므로 `git submodule status`에 `+`가 표시된다. 정상이다.
 
+`MODULE.bazel.lock`도 함께 수정된 것으로 보인다. **이것은 패치와 무관하고 되돌릴
+필요도 없다.** bazel이 입력 파일의 해시를 lock에 적어 두는데, `bazel/external/cxx/
+BUILD.bazel.skia` 같은 파일이 Windows 체크아웃에서 CRLF로 놓이기 때문에 upstream이
+LF로 계산해 둔 값과 어긋난다. 줄바꿈 하나의 문제이고, 이 저장소가 고정하는 것은
+submodule의 commit이지 그 작업 트리가 아니다.
+
 ### 4.3 `gn gen`과 `ninja`
 
 ```powershell
 gn gen third_party\skia\out\skia-ui-release `
     --script-executable=<python 경로> `
-    --args="<third_party\skia-args\skia-ui-release.gn 내용을 한 줄로>"
+    --args="<third_party\skia-args\skia-ui-release.gn 내용을 한 줄로> clang_win=\"<LLVM 루트>\""
 ninja -C third_party\skia\out\skia-ui-release skia
 ```
+
+`clang_win` 한 줄이 Windows 도구사슬을 통째로 바꾼다 — `cl.exe`가 `clang-cl.exe`로,
+`lib.exe`·`link.exe`가 `lld-link.exe`로 간다 (`gn/toolchain/BUILD.gn`). 짝이 되는
+`clang_win_version`은 `$clang_win/lib/clang`의 최신 디렉터리에서 GN이 스스로 구하므로
+주지 않는다. 인자 파일이 아니라 스크립트가 이 한 줄을 붙이는 이유는 값이 **이 기계의
+경로**이기 때문이다. GN 문자열에서 역슬래시가 이스케이프 문자이므로 슬래시로 바꿔
+넘긴다.
+
+`ninja`가 끝나면 스크립트가 `toolchain.json`을 산출 디렉터리에 쓴다 (5.4).
 
 `--script-executable`이 필요한 이유는 Skia의 `.gn`이 `script_executable = "python3"`로 되어 있는데 Windows의 `python3.exe`가 Microsoft Store 스텁인 경우가 많기 때문이다.
 
@@ -190,8 +236,10 @@ ninja -C third_party\skia\out\skia-ui-release skia
 | `skia_use_system_harfbuzz = false`<br>`skia_use_system_icu = false`<br>`skia_use_system_libjpeg_turbo = false`<br>`skia_use_system_libwebp = false`<br>`skia_use_system_libpng = false`<br>`skia_use_system_zlib = false` | 기본값이 `is_official_build && !is_canvaskit`(zlib은 `is_official_build`)이라 Release에서 자동으로 켜지고, 있지도 않은 시스템 라이브러리를 참조해 실패한다. 코덱 쪽은 include 경로가 통째로 비어 `png.h`·`jpeglib.h`를 못 찾는 컴파일 오류로 드러난다 |
 | `skia_use_dng_sdk = false`<br>`skia_use_piex = false` | `skia_use_dng_sdk`의 기본값이 `!is_wasm && skia_use_libjpeg_turbo_decode && skia_use_zlib`이다. jpeg를 켠 뒤로는 명시하지 않으면 저절로 켜져 `dng_sdk`·`piex` external을 더 끌어온다 |
 | `skia_use_jpeg_gainmaps = false` | 기본값이 `is_skia_dev_build`라 Debug 구성에서 켜지고, `optional("xml")`을 통해 expat external을 끌어온다 |
-| `extra_cflags = [ "/MT" ]` / `[ "/MTd" ]` | 라이브러리의 `CMAKE_MSVC_RUNTIME_LIBRARY`와 맞춰야 한다. 어긋나면 LNK2038로 드러난다 |
+| `extra_cflags = [ "/MT" ]` / `[ "/MTd" ]` | 라이브러리의 `CMAKE_MSVC_RUNTIME_LIBRARY`와 맞춰야 한다. 어긋나면 LNK2038로 드러난다. clang-cl도 같은 스위치를 받는다 |
 | `skia_enable_fontmgr_win` | 명시하지 않는다. Windows 기본값 `true`이며 `SkFontMgr_New_DirectWrite`가 여기에 의존한다 |
+| `is_trivial_abi = false` | **clang으로 세우는 동안의 ABI 계약이다** (5.4). MSVC에서는 값이 무엇이든 무해했다 |
+| `skia_use_partition_alloc = false` | 기본값이 `is_clang`이다. 도구사슬을 바꾸는 것만으로 켜져 `partition_alloc` external을 새로 요구하고 (없으면 `gn gen`이 거기서 죽는다), Skia 안의 `raw_ptr`을 noop에서 실물로 바꾼다 (실측) |
 
 코덱을 켜면 산출물도 늘어난다. `CMakeLists.txt`의 `SKIA_UI_SKIA_COMPONENTS`가 그
 목록이고 `scripts/verify_skia_root.ps1`이 같은 목록을 검사한다.
@@ -206,9 +254,16 @@ ninja -C third_party\skia\out\skia-ui-release skia
 
 ### 5.1 toolset과 Skia 빌드의 관계
 
-Skia는 `build_skia.ps1`을 실행한 셸의 MSVC로 빌드된다. 한 번 빌드한 산출물을 두 generator(VS2022·VS2026)가 공유한다.
+Skia를 컴파일하는 것은 **clang-cl**이지만, 헤더와 CRT와 Windows SDK는 여전히 MSVC의
+것이다 (5.4). 한 번 빌드한 산출물을 두 generator(VS2022·VS2026)가 공유한다.
 
-MSVC는 v14x 계열 안에서 이진 호환을 보장하므로 이것이 성립한다. 정적 CRT를 양쪽 모두 `/MT`·`/MTd`로 맞추는 것이 전제다. MSVC의 주 버전이 바뀌어 이진 호환이 끊기면 Skia를 다시 빌드한다.
+MSVC는 v14x 계열 안에서 이진 호환을 보장하므로 이것이 성립한다. 정적 CRT를 양쪽 모두
+`/MT`·`/MTd`로 맞추는 것이 전제다. MSVC의 주 버전이 바뀌어 이진 호환이 끊기면 Skia를
+다시 빌드한다.
+
+실측한 조합을 적어 둔다 (2026-09-11). Skia는 MSVC 14.44의 헤더로 컴파일했고,
+그것에 링크한 소비자는 MSVC 14.51이었다 — v14x 안의 이진 호환이 실제로 성립하는 것을
+`bench_skia.ps1`이 링크와 실행으로 확인했다.
 
 ### 5.2 png 코덱은 둘 중 하나다
 
@@ -302,6 +357,166 @@ rust 갈래의 Debug도 `/MTd` 소비자와 실제 링크했다. Bazel의 `dbg`�
 바꾸지 않는다. 두 번째 패치가 C++ bridge와 `cxx` archive에 `_DEBUG`와 iterator
 level 2를 명시하고, `verify_skia_root.ps1`이 두 archive의 COFF 지시문을 검사한다.
 
+### 5.4 도구사슬은 clang-cl이다 (2026-09-11)
+
+**Skia 자신은 clang-cl로 컴파일한다. 소비자는 그대로 MSVC다.**
+
+```powershell
+scripts\build_skia.ps1 -Configuration Release -RustPng                    # clang-cl (기본)
+scripts\build_skia.ps1 -Configuration Release -RustPng -Toolchain msvc    # 견줄 때만
+```
+
+#### 왜인가 — 처리 폭이 1이었다
+
+Skia의 CPU 래스터 파이프라인(`SkRasterPipeline`)은 한 번에 여러 픽셀을 처리하도록
+쓰여 있다. 그 "여러"를 만드는 벡터 형이 clang과 gcc의 확장이다.
+
+```cpp
+// src/opts/SkRasterPipeline_opts.h
+#if defined(__clang__)
+    template <int N, typename T> using Vec = T __attribute__((ext_vector_type(N)));
+#elif defined(__GNUC__)
+    ...
+#endif
+
+#if ...
+#elif !defined(__clang__) && !defined(__GNUC__)
+    #define SKRP_CPU_SCALAR
+```
+
+**둘 중 어느 것도 아니면 첫 판정에서 `SKRP_CPU_SCALAR`로 떨어진다.** MSVC로 세운
+Skia는 여기 걸려 한 번에 픽셀 하나를 처리했다. `SkOpts::Init()`의 실행 시점 판정도
+소용이 없다 — AVX2용으로 따로 컴파일되는 `SkOpts_ml3.cpp`(`/arch:AVX2`)조차 같은
+판정에 걸려 scalar로 서기 때문이다. 게다가 그 판정에 걸리면 8비트 고정소수 경로
+(`lowp`)는 **아예 만들어지지 않는다.** Skia가 그렇게 적어 두었다:
+
+> We don't bother generating the lowp stages if we are: ... in scalar mode
+> (MSVC, old clang, etc...)
+
+clang-cl로 세우면 기본이 SSE2(폭 4)이고, `SkOpts::Init()`이 CPU를 보고 AVX2를
+지원하면 `ml3` 갈래(폭 8, `lowp`는 16)로 바꿔 끼운다. 실측한 값이다.
+
+| | MSVC | clang-cl |
+| --- | --- | --- |
+| `raster_pipeline_highp_stride` | 1 | 8 |
+| `raster_pipeline_lowp_stride` | 1 | 16 |
+
+시간은 아래와 같다 (Release, i9-13900KF의 P코어 하나에 묶어 5회 × 5반복 중 최소값,
+`bench_skia.ps1`). 맞댄 두 산출물은 **`args.gn`이 `clang_win` 한 줄만 다르다** —
+같은 Skia commit, 같은 인자, 같은 MSVC 헤더다.
+
+| 재는 것 | MSVC | clang-cl | |
+| --- | ---: | ---: | ---: |
+| 4000×7000 → 1000×1750 cubic | 799.8 ms | 13.6 ms | **58.9배** |
+| 같은 것, 표면 할당까지 포함 | 838.1 ms | 14.1 ms | 59.4배 |
+| 4000×7000 → 500×875 cubic | 210.7 ms | 3.9 ms | 53.9배 |
+| 4000×7000 → 1000×1750 linear | 317.9 ms | 4.1 ms | 78.1배 |
+| png 디코딩 (37 MB) | 228.3 ms | 226.4 ms | 1.01배 |
+| jpeg 디코딩 | 172.1 ms | 154.1 ms | 1.12배 |
+| webp 디코딩 | 371.2 ms | 351.8 ms | 1.06배 |
+
+Debug도 같은 방향이다 (`bench_skia.ps1 -Configuration Debug`). 4000×7000 cubic 축소가
+2,587 ms에서 217 ms로 줄었다 (11.9배). Debug에서 배수가 작은 것은 `/Od`에서 벡터
+코드가 손해를 크게 보기 때문이며, `/MTd` 링크와 실행이 성립하는 것을 여기서
+확인한다.
+
+폭이 8배인데 시간이 59배 줄어든 것이 이상해 보인다면, 파이프라인의 생김새가
+답이다. 스테이지 하나하나가 간접 호출이고 그 호출이 **묶음 하나마다** 한 번이다.
+폭이 1이면 픽셀마다 그 값을 온전히 치르므로, 벡터로 가며 줄어드는 것은 산술
+8배만이 아니라 픽셀당 호출 횟수까지다.
+
+바뀌지 않는 것도 분명하다. **디코딩은 거의 그대로다** — jpeg는 libjpeg-turbo의
+어셈블리가, webp는 libwebp가, png는 bazel이 자기 clang으로 세우는 rust crate가
+하는 일이라 GN 도구사슬과 무관하다. 이 변경이 사는 자리는 래스터 파이프라인이다.
+
+#### MSVC 소비자와 어떻게 함께 서는가
+
+clang-cl은 자기 표준 라이브러리를 들고 오지 않는다. Skia의 GN이 MSVC의 헤더를
+`-imsvc`로 읽히고 링크할 CRT도 MSVC의 것을 가리키므로(`gn/skia/BUILD.gn`의
+`_include_dirs`·`lib_dirs`), 나오는 아카이브의 C++ ABI는 MSVC의 것이다. 실측한
+COFF 지시문이 두 도구사슬에서 **같다.**
+
+```
+/FAILIFMISMATCH:RuntimeLibrary=MT_StaticRelease     (Debug는 MTd_StaticDebug)
+/FAILIFMISMATCH:_ITERATOR_DEBUG_LEVEL=0             (Debug는 2)
+/FAILIFMISMATCH:_MSC_VER=1900
+```
+
+이름만 갈린다. MSVC의 CRT 헤더는 `/DEFAULTLIB:LIBCMT`를 pragma로 심고, clang-cl은
+`/MT`를 보고 스스로 `/DEFAULTLIB:libcmt.lib`를 심는다. 가리키는 것은 같은
+라이브러리이며 `verify_skia_root.ps1`이 두 형태를 모두 받는다.
+
+여기에 **`is_trivial_abi = false`가 계약으로 붙는다.** 그 인자가 참이면 clang에서만
+`SK_TRIVIAL_ABI=[[clang::trivial_abi]]`로 펼쳐져 `sk_sp` 같은 형의 호출 규약이
+바뀌는데, MSVC로 컴파일되는 소비자에게는 그 속성이 없다. 같은 형이 서로 다른 ABI가
+되고 링크는 성립한 채 런타임에 깨진다. MSVC로 세우던 동안에는 값이 무엇이든
+무해했으므로 이 줄이 필요 없었다. GN 기본값도 `false`지만, 무해하지 않게 된 지금은
+`third_party/skia-args/`가 명시하고 `verify_skia_root.ps1`이 참이면 실패시킨다.
+
+`skia_use_partition_alloc`은 반대쪽 함정이다. 기본값이 `is_clang`이라 **도구사슬을
+바꾸는 것만으로 저절로 켜진다.** 켜지면 `third_party/externals/partition_alloc`을
+새로 요구해 `gn gen`이 그 자리에서 죽고(실측), 서더라도 Skia 안의 `raw_ptr`이 noop에서
+실물로 바뀐다. 바꾸려는 것은 컴파일러 하나이므로 끈다.
+
+#### 무엇으로 세웠는지 어떻게 아는가
+
+`args.gn`은 "그렇게 gen했다"는 말이지 산출물의 사실이 아니고, CRT 지시문은 두
+도구사슬이 똑같이 낸다. 그래서 검사가 셋이다.
+
+1. `args.gn`의 `clang_win`이 비어 있지 않다.
+2. `skia.lib`에 `.llvm_addrsig` section이 있다 — clang이 `-faddrsig`(기본값)로
+   내는 LLVM 고유 section이다. 이름이 여덟 자를 넘어 COFF 문자열 테이블에 그대로
+   들어가므로 바이트를 훑는 것만으로 판정된다 (32 MB에 50 ms).
+3. `toolchain.json`이 산출물 옆에 있다. `build_skia.ps1`이 컴파일러·판번·MSVC·
+   Windows SDK를 적어 두고, `pack_skia.ps1`이 그것을 패키지와 `VERSION.json`에
+   싣는다. `args.gn`이 적지 못하는 것이 이것이라 파일을 따로 둔다.
+
+앞의 둘은 `verify_skia_root.ps1`이 검사하며, **MSVC로 세운 산출물은 여기서 실패한다.**
+의도한 것이다 — 링크는 되지만 소비자가 받는 물건으로는 다른 것이고, 그것을 모르고
+발행하는 것이 이 스크립트가 막으려는 일이다. 견주려고 만든 MSVC 산출물은
+`-OutputSuffix`로 다른 자리에 두고 검사에서 빼면 된다.
+
+#### 재는 자리
+
+```powershell
+scripts\bench_skia.ps1 -Configuration Release
+```
+
+`tools/skia_probe.cpp`를 **MSVC로** 컴파일해 두 산출 디렉터리에 각각 링크하고
+번갈아 돌린다. 그래서 이 스크립트가 통과하는 것은 성능 비교인 동시에
+**MSVC 소비자와의 호환성 검사**다 — CRT도, C++ ABI도, 실제 런타임 동작도 여기서
+함께 걸린다. 원본 이미지는 `tools/make_bench_source.py`가 Skia 없이 만든다.
+
+재는 값이 흔들리면 `-AffinityMask`로 논리 코어 하나에 묶는다. 재는 것은 모두 한
+갈래로 돌기 때문에, P코어와 E코어가 섞인 CPU에서는 어느 코어에 놓이는가만으로 몇 배가
+갈린다 (실측한 기계가 그랬다). 스크립트는 늘 우선순위를 High로 올린다.
+
+픽셀도 맞대어 본다. 채널 하나가 최대 2까지 갈리는 것을 통과로 두는데, 그것이
+도구사슬의 오차가 아니라 **Skia가 벡터 경로에서 늘 내는 값**이기 때문이다. 위에
+적은 대로 scalar에서는 `lowp`가 만들어지지 않아 8비트 블렌드까지 float로 돌지만,
+벡터 코드에서는 그 `lowp`가 살아나고 그쪽의 `div255`가 "never wrong by more than 1"인
+근사다. 프리멀티와 SrcOver처럼 그 연산이 겹치는 자리에서 최대 2가 난다. 실측에서
+색 공간 변환(Display P3 → sRGB)과 디코딩 결과는 **바이트까지 같았다.**
+
+### 5.5 알려진 구멍: rust png 인코더가 아카이브에 없다 (2026-09-11 실측)
+
+`args.gn`에 `skia_use_rust_png_encode = true`가 있는데도 `SkPngRustEncoder::Encode`가
+`skia.lib`에 들어가지 않는다. 부르면 LNK2019가 난다.
+
+Skia 152의 `BUILD.gn`에서 `:png_encode_rust`를 deps에 넣는 target이 `optional("xml")`
+하나뿐이고(legacy SVG factory를 위한 자리다), 이 저장소는 `skia_use_expat = false`·
+`skia_use_jpeg_gainmaps = false`로 그 target을 끈다. libpng 쪽(`:png_encode_libpng`)은
+`:skia` component가 직접 들고 있어 대칭이 아니다.
+
+**도구사슬과 무관하다.** MSVC로 세운 것과 clang-cl로 세운 것에서 똑같이 비어 있는
+것을 확인했다. skia-ui가 png를 인코딩하지 않으므로 지금 막히는 자리는 없고, 필요해질
+때 `:skia`의 deps에 한 줄을 더하는 패치로 푼다.
+
+**뒷 판번에서도 그대로다** (2026-09-11에 upstream의 `BUILD.gn`을 직접 읽어 확인했다).
+`chrome/m153`·`chrome/m154`·`main` 모두 `skia_component("skia")`의 deps에
+`:png_decode_rust`는 있고 `:png_encode_rust`는 없다 — 디코더 쪽만 대칭이 맞춰져
+있다. 버전을 올린다고 저절로 풀리지 않으므로, 그때 다시 뒤지지 않도록 적어 둔다.
+
 ## 6. 텍스트 처리 구성 (선택)
 
 현재 skia-ui는 `drawSimpleText`와 `measureText`만 사용해 shaping engine이 필요하지 않다. `SkShaper`나 `SkParagraph`를 도입할 때 이 구성을 쓴다.
@@ -336,6 +551,7 @@ git -C third_party\skia-externals\unicodetools sparse-checkout set unicodetools/
 - `third_party/patches/`의 패치가 여전히 필요하고 적용되는지
 - `third_party/skia-args/`의 GN args
 - `scripts/verify_skia_root.ps1`의 `$minimum_milestone`
+- `scripts/pack_skia.ps1`의 `$package_revision` — commit이 바뀌면 1로 되돌린다 (5.4)
 
 갱신 후에는 configure, 빌드, 전체 CTest, 한국어와 Codicon 렌더링 육안 검증을 모두 수행한다.
 
