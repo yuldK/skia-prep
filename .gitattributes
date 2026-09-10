@@ -1,9 +1,11 @@
 * text=auto
 
+*.cpp text eol=crlf
 *.gn text eol=crlf
 *.json text eol=crlf
 *.md text eol=crlf
 *.ps1 text eol=crlf
+*.py text eol=crlf
 .gitignore text eol=crlf
 
 # patch 파일은 LF를 유지해야 `git apply`가 성립한다.
