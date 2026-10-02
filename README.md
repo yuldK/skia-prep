@@ -13,7 +13,7 @@ bazel 캐시 15 GB — 을 이 저장소 하나가 떠안는다. `luil`을 쓰�
 
 | 대상 | 세우는 곳 | 컴파일러 | GPU | Release · Debug zip |
 | --- | --- | --- | --- | --- |
-| `win-x64` | Windows | clang-cl | Direct3D | 20.5 MB · 136 MB |
+| `win-x64` | Windows | clang-cl | Direct3D | 19.6 MB · 112.6 MB |
 | `android-arm64` | Linux (WSL2) | NDK r27d clang | Vulkan | 16.3 MB · 48.1 MB |
 
 iOS는 아직 없다. Skia의 iOS Bazel 도구사슬이 macOS에서만 돌아 Mac이 필요하다.

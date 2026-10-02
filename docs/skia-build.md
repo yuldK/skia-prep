@@ -767,33 +767,40 @@ android_probe passed
 ### 8.7 생산자의 경로를 싣지 않는다
 
 공개 자산이다. 처음 세운 Android 패키지에는 생산자의 홈 디렉터리
-(`/home/<사용자>`)가 세 갈래로 실려 있었다.
+(`/home/<사용자>`)가 세 갈래로 실려 있었다. Windows도 Debug에서 같았다 — **발행한
+win-x64 r2 Debug 자산에 사용자 이름이 실려 있다** (Release에는 없다). r2는 다시 내지
+않고, r3부터 막는다.
 
-| 자리 | 무엇이 | 막는 법 |
-| --- | --- | --- |
-| `args.gn` | `ndk = "<NDK 경로>"` | `pack_skia.ps1`이 그 경로를 이름으로 바꿔 싣는다 |
-| GN이 세운 Debug 아카이브 | DWARF의 컴파일 디렉터리, external 소스, NDK 시스템 헤더 | `build_skia.ps1`이 `-ffile-prefix-map`을 덧붙인다 (저장소 → `skia-prep`, NDK → `android-ndk`) |
-| Bazel이 세운 rust 아카이브 둘 | DWARF의 컴파일 디렉터리 (Bazel sandbox, `_bazel_<사용자>`) — 449개 오브젝트 | `pack_skia.ps1`이 `llvm-objcopy --strip-debug`로 디버그 정보를 걷는다. 심볼은 남는다 |
+| 대상 | 자리 | 무엇이 | 막는 법 |
+| --- | --- | --- | --- |
+| 둘 다 | `args.gn` | 아래 prefix map의 앞쪽, Android의 `ndk` | `pack_skia.ps1`이 그 경로를 `<skia-prep>`·`<skia>`·`<android-ndk …>`로 바꿔 싣는다 |
+| Android | GN이 세운 Debug 아카이브 | DWARF의 컴파일 디렉터리, external 소스, NDK 시스템 헤더 | `build_skia.ps1`이 `-ffile-prefix-map`을 덧붙인다 (저장소 → `skia-prep`, NDK → `android-ndk`) |
+| Windows | GN이 세운 Debug `.lib` 열 | `/Z7` CodeView의 저장소 경로 (저장소가 사용자 이름의 폴더 아래에 있다) | `build_skia.ps1`이 `/clang:-ffile-prefix-map`, `-fdebug-compilation-dir=.`, `-gno-codeview-command-line`을 덧붙인다 |
+| 둘 다 | Bazel이 세운 rust 아카이브 둘 | 디버그 정보의 Bazel 출력 경로 (`_bazel_<사용자>`) | `pack_skia.ps1`이 디버그 정보를 걷는다. 심볼은 남는다 |
+
+clang-cl에 둘이 더 드는 이유는 이렇다 (clang 19.1.5로 실측).
+`S_OBJNAME`이 오브젝트의 절대 경로를 적는데 prefix map은 그것을 바꾸지 않고(드라이브
+문자의 대소문자까지 바뀌어 나온다), `LF_BUILDINFO`는 컴파일 명령줄을 통째로 적어
+prefix map 인자 자체의 원래 경로가 실린다. 경로는 GN 문자열에 맞게 슬래시로 넘긴다 —
+clang은 Windows에서 구분자와 대소문자를 가리지 않고 앞부분을 맞춘다.
+
+**Windows의 rust 아카이브는 통째로 걷을 수 없다.** Rust 표준 라이브러리가 넣는 짧은
+import 오브젝트(`bcryptprimitives.dll` 등)를 `llvm-objcopy`가 읽지 못한다. 그래서
+멤버로 갈라 COFF 오브젝트만 걷고 원래 순서로 다시 묶는다. 이때 **멤버 이름을 지켜야
+한다** — 번호를 붙인 이름으로 묶었더니, 걷지 않고 다시 묶기만 해도 MSVC로 링크한
+실행 파일이 시작하자마자 access violation으로 죽었다. 원래 이름으로 묶으면 걷은
+것까지 돈다 (`bench_skia.ps1`로 링크하고 실행해 확인, 픽셀도 r2와 바이트까지 같다).
+어느 멤버의 이름이 문제인지는 가르지 않았다.
 
 rust 쪽을 빌드 때 고치지 않는 것은, Bazel의 C++과 rustc 양쪽에 경로 대응을 넣어야
-하고 그것이 Skia 트리를 더 고치는 일이기 때문이다. 걷어 내는 쪽이 결정적이고
-대상 하나에 갇힌다. 잃는 것은 rust 코덱과 그 아카이브에 함께 담긴 Skia 오브젝트의
-디버그 정보다 — 앞엣것은 링크에서 `libskia.a`가 이기므로 원래 쓰이지 않는다.
+하고 그것이 Skia 트리를 더 고치는 일이기 때문이다. 잃는 것은 rust 코덱과 그 아카이브에
+함께 담긴 Skia 오브젝트의 디버그 정보다 — 뒤엣것은 링크에서 `libskia.a`·`skia.lib`이
+이기므로 원래 쓰이지 않는다.
 
-마지막 그물은 `pack_skia.ps1`의 검사다. 압축하기 전에 패키지의 모든 파일에서
-이 기계의 경로(`$HOME`·`_bazel_$USER`, Windows에서는 `%USERPROFILE%`)를 바이트로
-찾고, 하나라도 있으면 **압축하지 않고 멈춘다.** 위의 표가 그 검사에 걸려 찾은
-것이다. 조치 뒤의 Android 패키지는 Release·Debug 모두 사용자 이름이 대소문자
-어느 쪽으로도 나오지 않는다.
-
-**Windows 패키지에는 이 검사가 눈이 어둡다 (2026-10-02 확인).** Release에는 사용자
-이름이 없다. Debug에는 있다 — 발행한 r2 Debug 자산도 같다.
-
-| Windows Debug의 자리 | 무엇이 |
-| --- | --- |
-| GN이 세운 `.lib` 열 | `/Z7` 디버그 정보의 저장소 경로 (`E:\…\<사용자>\skia-prep\…` — 저장소가 사용자 이름의 폴더 아래에 있다) |
-| `librust_png_ffi_rs.a` | Bazel의 출력 경로 (`c:\users\<사용자>\_bazel_<사용자>\…`, Bazel이 소문자로 적는다) |
-
-검사가 그것을 놓친 것은 표지가 `%USERPROFILE%` 하나이고 대소문자를 가리기 때문이다.
-표지를 늘리면 지금의 Windows Debug는 압축되지 않으므로, 그 갈래를 고치는 것(Windows의
-prefix map, Bazel 아카이브의 디버그 정보)과 함께 따로 한다.
+마지막 그물은 `pack_skia.ps1`의 검사다. 압축하기 전에 패키지의 모든 파일에서 이 기계의
+경로 — 홈 디렉터리, `_bazel_<사용자>`, 저장소와 Skia 트리의 경로를 양쪽 구분자로 —
+를 **대소문자 없이** 찾고, 하나라도 있으면 압축하지 않고 멈춘다. 처음의 검사는
+`%USERPROFILE%` 하나를 대소문자를 가려 찾아, Bazel이 소문자로 적은
+`c:\users\<사용자>`와 사용자 이름 폴더 아래의 저장소 경로를 놓쳤다. 지금은 두 대상의
+Release·Debug 모두 이 검사를 지나고, 따로 훑어도 사용자 이름이 대소문자 어느 쪽으로도
+나오지 않는다.
