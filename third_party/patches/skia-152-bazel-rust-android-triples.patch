@@ -1,0 +1,35 @@
+The rust png codec cannot be built for Android out of the box. Two lists in
+MODULE.bazel leave out aarch64-linux-android:
+
+- rust.toolchain extra_target_triples: no Rust standard library for the target.
+- crate.from_specs supported_platform_triples: crate_universe marks every crate
+  (cxx first) incompatible with //bazel/platform:android_arm64, and analysis
+  stops with "Target //rust/png:ffi_rs is incompatible".
+
+cargo_bindeps is left alone. cxxbridge-cmd runs on the exec platform (linux
+x86_64), not on the target.
+
+Checked on Skia 152 (0873ec164a) under WSL2 Ubuntu 24.04:
+  bazelisk build //rust/png:ffi_rs --platforms=//bazel/platform:android_arm64
+gives libffi_rs.a whose 960 objects are all ELF64 AArch64.
+
+diff --git a/MODULE.bazel b/MODULE.bazel
+index 41c5c4d24a..95b68552da 100644
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -93,6 +93,7 @@ rust.toolchain(
+         "x86_64-apple-darwin",
+         "aarch64-apple-darwin",
+         "aarch64-apple-ios",
++        "aarch64-linux-android",
+     ],
+     versions = [
+         # supported versions from https://github.com/bazelbuild/rules_rust/blob/6bdae371374a3740e97370bd9379da5b3ecab389/util/fetch_shas/fetch_shas_VERSIONS.txt
+@@ -194,6 +195,7 @@ crate.from_specs(
+     # https://bazelbuild.github.io/rules_rust/crate_universe_bzlmod.html#crate.from_specs-supported_platform_triples
+     supported_platform_triples = [
+         "aarch64-apple-darwin",
++        "aarch64-linux-android",
+         "aarch64-unknown-linux-gnu",
+         "wasm32-unknown-unknown",
+         "wasm32-wasip1",

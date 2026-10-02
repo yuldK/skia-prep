@@ -1,0 +1,29 @@
+GN hands the rust Bazel build a target platform only on mac. For Android it
+passes nothing, so Bazel builds the rust png codec for the host (linux x86_64)
+and the archive cannot link into an arm64 binary.
+
+This adds the arm64 case only. arm32 would also need armv7-linux-androideabi
+in MODULE.bazel (skia-152-bazel-rust-android-triples.patch adds arm64 alone),
+and there is no Android x64 platform in bazel/platform. Builds without rust
+are not affected.
+
+Checked on Skia 152 (0873ec164a) under WSL2 Ubuntu 24.04 with NDK r27d:
+`ninja skia` for target_os="android" target_cpu="arm64" with
+skia_use_rust_png_decode=true, and a probe executable links against the result
+with -Wl,--allow-multiple-definition (what rust_ffi_libs_config in BUILD.gn
+already asks for).
+
+diff --git a/BUILD.gn b/BUILD.gn
+index df31ad6389..4a59692df5 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1372,6 +1372,9 @@ if (is_mac) {
+     bazel_args += [ "--platforms=//bazel/platform:mac_x64_hermetic" ]
+   }
+ }
++if (is_android && target_cpu == "arm64") {
++  bazel_args += [ "--platforms=//bazel/platform:android_arm64" ]
++}
+ if (is_debug) {
+   bazel_args += [ "--compilation_mode=dbg" ]
+ } else {

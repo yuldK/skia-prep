@@ -37,3 +37,12 @@
 [submodule "third_party/skia-externals/icu"]
 	path = third_party/skia-externals/icu
 	url = https://chromium.googlesource.com/chromium/deps/icu.git
+[submodule "third_party/skia-externals/vulkanmemoryallocator"]
+	path = third_party/skia-externals/vulkanmemoryallocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+[submodule "third_party/skia-externals/freetype"]
+	path = third_party/skia-externals/freetype
+	url = https://github.com/freetype/freetype.git
+[submodule "third_party/skia-externals/expat"]
+	path = third_party/skia-externals/expat
+	url = https://github.com/libexpat/libexpat.git
