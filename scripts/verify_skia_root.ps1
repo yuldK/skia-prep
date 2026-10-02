@@ -6,6 +6,9 @@
 param(
     [string]$SkiaRoot,
     [string[]]$Configurations = @('Debug', 'Release'),
+    # build_skia.ps1의 -Target과 같은 값이다. 읽는 자리와 판정이 갈린다.
+    [ValidateSet('win-x64', 'android-arm64')]
+    [string]$Target = 'win-x64',
     # build_skia.ps1의 -OutputSuffix와 같은 값이다.
     [string]$OutputSuffix
 )
@@ -17,25 +20,50 @@ $repository_root = Split-Path -Parent $PSScriptRoot
 if (-not $SkiaRoot) {
     $SkiaRoot = Join-Path $repository_root 'third_party\skia'
 }
+$is_android = $Target -like 'android-*'
+$target_part = if ($is_android) { "$Target-" } else { '' }
 
-# luil CMakeLists.txt의 LUIL_SKIA_COMPONENTS에서 png 갈래 몫을 뺀 목록이다 (파일 이름 그대로).
-$components = @(
-    'skia.lib', 'skcms.lib', 'spirv_cross.lib', 'd3d12allocator.lib',
-    'libjpeg.lib', 'libjpeg12.lib', 'libjpeg16.lib',
-    'libwebp.lib', 'libwebp_sse41.lib', 'wuffs.lib')
-# png 코덱에 따라 갈리는 산출물이다.
-$libpng_components = @('libpng.lib', 'zlib.lib')
+# win-x64는 luil CMakeLists.txt의 LUIL_SKIA_COMPONENTS에서 png 갈래 몫을 뺀 목록이다
+# (파일 이름 그대로). android-arm64는 build_skia.ps1이 내는 것 전부다 — libpng과
+# zlib은 freetype이 끌어오므로 png 갈래와 무관하게 이쪽에 있고, cpu-features는
+# NDK의 sources/android/cpufeatures를 Skia가 컴파일한 것이다.
+if ($is_android) {
+    $components = @(
+        'libskia.a', 'libskcms.a',
+        'libjpeg.a', 'libjpeg12.a', 'libjpeg16.a',
+        'libwebp.a', 'libwebp_sse41.a', 'libwuffs.a',
+        'libfreetype2.a', 'libexpat.a', 'libpng.a', 'libzlib.a', 'libcpu-features.a')
+    $libpng_components = @()
+}
+else {
+    $components = @(
+        'skia.lib', 'skcms.lib', 'spirv_cross.lib', 'd3d12allocator.lib',
+        'libjpeg.lib', 'libjpeg12.lib', 'libjpeg16.lib',
+        'libwebp.lib', 'libwebp_sse41.lib', 'wuffs.lib')
+    # png 코덱에 따라 갈리는 산출물이다.
+    $libpng_components = @('libpng.lib', 'zlib.lib')
+}
 $rust_png_components = @('librust_png_ffi_rs.a', 'libcxx_cc.a')
 # 이 저장소가 고정한 Skia의 밀번이다 (docs/skia-build.md 7).
 # rust png 갈래는 152 아래에서 아예 서지 않는다 (5.3).
 $minimum_milestone = 152
-# luil CMakeLists.txt의 LUIL_SKIA_REQUIRED_ARGUMENTS와 같은 목록이다.
+# win-x64는 luil CMakeLists.txt의 LUIL_SKIA_REQUIRED_ARGUMENTS와 같은 목록이다.
+# android-arm64는 luil에 아직 짝이 없다 — 이 저장소의 Android args가 켜는 것을
+# 그대로 요구한다 (docs/skia-build.md 8).
 # png은 둘 중 하나라 여기 없다 — 아래에서 따로 판정한다.
-$required_arguments = @(
-    @{ name = 'skia_use_direct3d'; reason = 'required by the renderer' },
+$codec_arguments = @(
     @{ name = 'skia_use_libjpeg_turbo_decode'; reason = 'jpeg decoding' },
     @{ name = 'skia_use_libwebp_decode'; reason = 'webp decoding, still and animated' },
     @{ name = 'skia_use_wuffs'; reason = 'gif decoding' })
+$required_arguments = if ($is_android) {
+    @(
+        @{ name = 'skia_use_vulkan'; reason = 'the Android GPU backend' },
+        @{ name = 'skia_use_freetype'; reason = 'system fonts (SkFontMgr_android)' },
+        @{ name = 'skia_use_expat'; reason = 'reads /system/etc/fonts.xml' }) + $codec_arguments
+}
+else {
+    @(@{ name = 'skia_use_direct3d'; reason = 'required by the renderer' }) + $codec_arguments
+}
 # 반드시 꺼져 있어야 하는 것들이다. 둘 다 clang에서만 실물이 되고, 켜지면
 # 소비자와 어긋난다 — is_trivial_abi는 ABI를(MSVC 소비자에게 그 속성이 없다),
 # skia_use_partition_alloc은 external과 raw_ptr 구현을 바꾼다.
@@ -82,6 +110,47 @@ public static class SkiaArchiveMarker {
             }
         }
         return false;
+    }
+}
+
+// ar 아카이브의 ELF member가 무슨 CPU용인지 센다 (Android 대상).
+//
+// 바이트에서 "\x7fELF"를 훑지 않고 ar 머리를 따라 member를 하나씩 걷는다 —
+// 그 네 바이트는 데이터 안에서도 나온다. member 머리는 60바이트이고 크기가
+// 48번째부터 10자리 십진수이며, 본문은 짝수 경계로 채워진다. 이름이 "/"
+// (심볼 표)·"//"(긴 이름 표)·"/SYM64/"인 member는 object가 아니다.
+public static class SkiaArchiveElf {
+    // 반환: [AArch64 member 수, 다른 CPU member 수, 첫 다른 e_machine 값].
+    public static long[] CountMachines(string path) {
+        long aarch64 = 0, other = 0, first_other = -1;
+        using (FileStream file = File.OpenRead(path))
+        using (BinaryReader reader = new BinaryReader(file)) {
+            byte[] magic = reader.ReadBytes(8);
+            if (System.Text.Encoding.ASCII.GetString(magic) != "!<arch>\n") {
+                throw new InvalidDataException("not an ar archive: " + path);
+            }
+            while (file.Position + 60 <= file.Length) {
+                byte[] header = reader.ReadBytes(60);
+                string name = System.Text.Encoding.ASCII.GetString(header, 0, 16).TrimEnd(' ');
+                long size = long.Parse(System.Text.Encoding.ASCII.GetString(header, 48, 10).Trim());
+                long start = file.Position;
+                bool special = name == "/" || name == "//" || name == "/SYM64/";
+                if (!special && size >= 20) {
+                    byte[] elf = reader.ReadBytes(20);
+                    if (elf[0] == 0x7f && elf[1] == (byte)'E' && elf[2] == (byte)'L' && elf[3] == (byte)'F') {
+                        int machine = elf[5] == 1 ? (elf[18] | (elf[19] << 8)) : ((elf[18] << 8) | elf[19]);
+                        if (machine == 0xB7) {
+                            aarch64++;
+                        } else {
+                            other++;
+                            if (first_other < 0) { first_other = machine; }
+                        }
+                    }
+                }
+                file.Position = start + size + (size & 1);
+            }
+        }
+        return new long[] { aarch64, other, first_other };
     }
 }
 '@
@@ -141,12 +210,13 @@ function Find-Dumpbin {
     return ''
 }
 
-$dumpbin = Find-Dumpbin
+# COFF 지시문 검사는 Windows 대상의 것이다. Android 아카이브는 ELF라 dumpbin이 읽지 못한다.
+$dumpbin = if ($is_android) { '' } else { Find-Dumpbin }
 
 foreach ($configuration in $Configurations) {
     Write-Output ''
     $directory = Join-Path $SkiaRoot `
-        ('out\skia-ui-{0}{1}' -f $configuration.ToLowerInvariant(), $OutputSuffix)
+        ('out\skia-ui-{0}{1}{2}' -f $target_part, $configuration.ToLowerInvariant(), $OutputSuffix)
     Write-Output "-- $configuration : $directory"
 
     # png 코덱을 먼저 정한다 — 요구할 산출물이 그것으로 갈린다.
@@ -208,23 +278,56 @@ foreach ($configuration in $Configurations) {
                 (-not ($arguments_text -match ('{0}\s*=\s*true' -f $forbidden.name))) `
                 ('must stay false — ' + $forbidden.reason)
         }
-        # 도구사슬이다. 이 저장소가 발행하는 것은 clang-cl 갈래 하나뿐이다.
-        # MSVC로 세운 Skia도 링크는 되지만 CPU 래스터 파이프라인이 폭 1의
-        # scalar 경로로 돌아, 소비자가 받는 물건으로는 다른 것이다
-        # (docs/skia-build.md 5.4).
-        $clang_win = if ($arguments_text -match 'clang_win\s*=\s*"([^"]+)"') { $Matches[1] } else { '' }
-        Add-Result "$configuration/toolchain arg" ([bool]$clang_win) `
-            $(if ($clang_win) { "clang_win = $clang_win" }
-                else { 'clang_win is not set; this was built with MSVC (-Toolchain msvc)' })
+        if ($is_android) {
+            # Android의 도구사슬은 NDK다. args가 대상과 NDK를 함께 말해야 한다.
+            $target_ok = $arguments_text -match 'target_os\s*=\s*"android"' -and
+                $arguments_text -match 'target_cpu\s*=\s*"arm64"'
+            Add-Result "$configuration/target" $target_ok 'target_os = "android", target_cpu = "arm64"'
+            $ndk = if ($arguments_text -match '(?m)^\s*ndk\s*=\s*"([^"]+)"') { $Matches[1] } else { '' }
+            Add-Result "$configuration/toolchain arg" ([bool]$ndk) `
+                $(if ($ndk) { "ndk = $ndk" } else { 'ndk is not set; build with scripts/build_skia.ps1 -Target android-arm64' })
+        }
+        else {
+            # 도구사슬이다. 이 저장소가 발행하는 것은 clang-cl 갈래 하나뿐이다.
+            # MSVC로 세운 Skia도 링크는 되지만 CPU 래스터 파이프라인이 폭 1의
+            # scalar 경로로 돌아, 소비자가 받는 물건으로는 다른 것이다
+            # (docs/skia-build.md 5.4).
+            $clang_win = if ($arguments_text -match 'clang_win\s*=\s*"([^"]+)"') { $Matches[1] } else { '' }
+            Add-Result "$configuration/toolchain arg" ([bool]$clang_win) `
+                $(if ($clang_win) { "clang_win = $clang_win" }
+                    else { 'clang_win is not set; this was built with MSVC (-Toolchain msvc)' })
+        }
     }
     else {
         Add-Result "$configuration/args.gn" $false 'missing'
     }
 
+    # Android에서 아카이브에 물을 것은 CPU다. libskia.a는 GN이 NDK로 세우므로
+    # 언제나 맞는다. 어긋나는 것은 rust 아카이브다 — GN이 Bazel에 Android
+    # 플랫폼을 넘기지 않으면(skia-152-bazel-rust-android-platform.patch가 빠지면)
+    # 그것만 조용히 호스트(x86_64)용으로 서고, 링크 단계에서야 드러난다.
+    if ($is_android) {
+        $elf_archives = @('libskia.a')
+        if ($png_codec -eq 'rust') {
+            $elf_archives += $rust_png_components
+        }
+        foreach ($component in $elf_archives) {
+            $library = Join-Path $directory $component
+            if (-not (Test-Path -LiteralPath $library -PathType Leaf)) {
+                continue
+            }
+            $counts = [SkiaArchiveElf]::CountMachines($library)
+            $ok = $counts[0] -gt 0 -and $counts[1] -eq 0
+            $detail = if ($counts[1] -eq 0) { '{0} AArch64 objects' -f $counts[0] }
+            else { '{0} objects are not AArch64 (e_machine 0x{1:X}); the rust build missed the Android platform' -f $counts[1], $counts[2] }
+            Add-Result "$configuration/$component CPU" $ok $detail
+        }
+    }
+
     # args.gn은 "그렇게 gen했다"는 말이다. 아카이브 자신에게 무엇이 컴파일했는지
     # 묻는 자리가 따로 있어야 한다 — .llvm_addrsig가 clang만 내는 section이다.
     $archive = Join-Path $directory 'skia.lib'
-    if (Test-Path -LiteralPath $archive) {
+    if (-not $is_android -and (Test-Path -LiteralPath $archive)) {
         $built_by_clang = [SkiaArchiveMarker]::Contains($archive, '.llvm_addrsig')
         Add-Result "$configuration/built by clang-cl" $built_by_clang `
             $(if ($built_by_clang) { 'skia.lib carries LLVM sections' }
@@ -236,9 +339,15 @@ foreach ($configuration in $Configurations) {
     $toolchain_file = Join-Path $directory 'toolchain.json'
     if (Test-Path -LiteralPath $toolchain_file -PathType Leaf) {
         $toolchain = Get-Content -Raw -LiteralPath $toolchain_file | ConvertFrom-Json
-        Write-Output ("[    ] {0,-42} {1}" -f "$configuration/toolchain.json",
-            ('{0} {1}, MSVC {2}, Windows SDK {3}' -f $toolchain.compiler,
-                $toolchain.compiler_version, $toolchain.msvc_version, $toolchain.windows_sdk))
+        $summary = if ($is_android) {
+            'NDK r{0}, ndk_api {1}, rust bridge NDK r{2}' -f $toolchain.ndk_revision,
+            $toolchain.ndk_api, $toolchain.rust_bridge_ndk_revision
+        }
+        else {
+            '{0} {1}, MSVC {2}, Windows SDK {3}' -f $toolchain.compiler,
+            $toolchain.compiler_version, $toolchain.msvc_version, $toolchain.windows_sdk
+        }
+        Write-Output ("[    ] {0,-42} {1}" -f "$configuration/toolchain.json", $summary)
     }
 
     # 정적 CRT가 luil과 어긋나면 LNK2038로 드러난다.

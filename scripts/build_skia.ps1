@@ -26,11 +26,21 @@
 # 소비자는 여전히 MSVC로 빌드한다. 그 경계가 성립하는 것은 clang-cl이 MSVC의
 # 헤더와 CRT를 그대로 쓰고(-imsvc), is_trivial_abi를 false로 못 박기 때문이다
 # (third_party/skia-args의 그 줄과 docs/skia-build.md 5.4).
+#
+# 대상은 -Target이 정한다. 기본은 win-x64이고, 그때는 위의 모든 것이 그대로다.
+#   win-x64       : Windows에서 돈다. clang-cl, Direct3D.
+#   android-arm64 : **Linux에서 돈다** (WSL2면 된다). NDK clang, Vulkan.
+# Android가 Linux를 요구하는 것은 rust png 때문이다. Skia의 Bazel NDK 도구사슬이
+# linux x86_64 호스트에서만 돈다 (docs/skia-build.md 8). -Toolchain·-ClangPath는
+# Windows 대상에서만 뜻이 있고, Android에서는 -NdkPath가 그 자리다.
 
 [CmdletBinding()]
 param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
+    [ValidateSet('win-x64', 'android-arm64')]
+    [string]$Target = 'win-x64',
+    [string]$NdkPath,
     [string]$SkiaRoot,
     [string]$ArgumentFile,
     [ValidateSet('clang', 'msvc')]
@@ -51,6 +61,28 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repository_root = Split-Path -Parent $PSScriptRoot
+
+# 호스트 판정에 $IsWindows를 쓰지 않는다. Windows PowerShell 5.1에는 그 변수가
+# 없어 StrictMode가 읽는 순간 던진다. $env:OS는 5.1·7·Linux에서 모두 읽힌다.
+$windows_host = $env:OS -eq 'Windows_NT'
+$is_android = $Target -like 'android-*'
+if ($is_android -and $windows_host) {
+    throw @"
+-Target $Target must run on Linux (WSL2 is enough).
+
+Skia builds its rust png codec through Bazel, and Skia's Bazel NDK toolchain
+only runs on a linux x86_64 host (toolchain/BUILD.bazel). Run this script with
+pwsh inside WSL, against a Skia tree on the Linux file system.
+"@
+}
+if (-not $is_android -and -not $windows_host) {
+    throw "-Target $Target must run on Windows. It compiles with clang-cl against MSVC."
+}
+if ($is_android -and ($PSBoundParameters.ContainsKey('Toolchain') -or $ClangPath)) {
+    throw "-Toolchain and -ClangPath apply to win-x64 only. Android compiles with the NDK's clang (-NdkPath)."
+}
+$executable_suffix = if ($windows_host) { '.exe' } else { '' }
+
 # 기본은 submodule이지만, 이미 준비해 둔 Skia 트리를 가리킬 수도 있다.
 # verify_skia_root.ps1이 같은 이름의 인자를 이미 받고 있고, docs/skia-build.md도
 # CMake 쪽에서 기존 트리를 재사용하는 길을 적어 두었다 — 빌드 쪽에만 없던 손잡이다.
@@ -69,7 +101,10 @@ $externals_target = Join-Path $skia_root 'third_party\externals'
 # 브라우저로 받은 실행 파일을 두는 자리다.
 # 저장소는 이 디렉터리를 추적하지 않는다.
 $tool_directory = Join-Path $repository_root 'third_party\skia-tools'
-$minimum_ninja_version = [version]'1.13'
+# Linux의 하한은 Skia가 DEPS에 고정한 판번(1.12.1)이다. bin/fetch-ninja가 그것을
+# 받고, Android 갈래는 그것으로 섰다 (2026-10-02 실측). Windows의 1.13은 이
+# 저장소가 처음부터 둔 값이다.
+$minimum_ninja_version = if ($windows_host) { [version]'1.13' } else { [version]'1.12' }
 
 # Visual Studio는 CMake 지원의 일부로 ninja를 함께 설치한다.
 # 이미 있는 것을 쓰면 ninja는 받을 필요가 없다.
@@ -106,17 +141,22 @@ function Get-VisualStudioNinjaPath {
 function Get-ToolCandidate {
     param([string]$name)
 
+    # Linux에서는 확장자가 없고 Visual Studio 자리도 없다. 나머지 순서는 같다 —
+    # fetch-gn·fetch-ninja가 Linux에서도 같은 자리에 둔다.
+    $file = $name + $executable_suffix
     $candidates = [System.Collections.Generic.List[string]]::new()
-    $candidates.Add((Join-Path $tool_directory ('{0}.exe' -f $name)))
+    $candidates.Add((Join-Path $tool_directory $file))
     if ($name -eq 'gn') {
-        $candidates.Add((Join-Path $skia_root 'bin\gn.exe'))
-        $candidates.Add((Join-Path $skia_root 'third_party\gn\gn.exe'))
+        $candidates.Add((Join-Path $skia_root (Join-Path 'bin' $file)))
+        $candidates.Add((Join-Path $skia_root (Join-Path 'third_party\gn' $file)))
     }
     else {
-        $candidates.Add((Join-Path $skia_root 'third_party\ninja\ninja.exe'))
-        $candidates.Add((Join-Path $skia_root 'bin\ninja.exe'))
-        foreach ($path in (Get-VisualStudioNinjaPath)) {
-            $candidates.Add($path)
+        $candidates.Add((Join-Path $skia_root (Join-Path 'third_party\ninja' $file)))
+        $candidates.Add((Join-Path $skia_root (Join-Path 'bin' $file)))
+        if ($windows_host) {
+            foreach ($path in (Get-VisualStudioNinjaPath)) {
+                $candidates.Add($path)
+            }
         }
     }
     return $candidates.ToArray()
@@ -413,6 +453,80 @@ Do one of these:
 "@
 }
 
+# Android 대상의 컴파일러는 NDK의 clang이다. clang_win과 같은 규칙으로, 정할 것은
+# **NDK 루트 하나**이고 gn args의 ndk에 넘긴다 (gn/BUILDCONFIG.gn이 거기서
+# toolchains/llvm/prebuilt/<host>를 고른다).
+#
+# 판번은 Skia CI가 쓰는 r27d를 기대한다 (infra/bots/assets/android_ndk_linux).
+# 다른 판번도 받되 경고한다 — 이 저장소가 실측한 것은 그 하나뿐이다.
+#
+# rust 갈래의 C++ 브리지는 이것으로 컴파일되지 **않는다.** Bazel이 자기 NDK
+# (r21e)를 받아 쓴다. 그 판번은 toolchain.json의 rust_bridge_ndk_revision에 적는다.
+$expected_ndk_major = '27'
+$expected_ndk_revision = '27.3.13750724'
+
+function Get-NdkRevision {
+    param([string]$root)
+
+    $properties = Join-Path $root 'source.properties'
+    if (-not (Test-Path -LiteralPath $properties -PathType Leaf)) {
+        return ''
+    }
+    $text = Get-Content -Raw -LiteralPath $properties
+    if ($text -match 'Pkg\.Revision\s*=\s*([0-9.]+)') {
+        return $Matches[1]
+    }
+    return ''
+}
+
+function Test-NdkRoot {
+    param([string]$root)
+
+    if (-not $root -or -not (Test-Path -LiteralPath $root -PathType Container)) {
+        return $false
+    }
+    $clang = Join-Path $root 'toolchains/llvm/prebuilt/linux-x86_64/bin/clang'
+    return ((Test-Path -LiteralPath $clang -PathType Leaf) -and [bool](Get-NdkRevision -root $root))
+}
+
+function Resolve-Ndk {
+    if ($NdkPath) {
+        if (-not (Test-NdkRoot -root $NdkPath)) {
+            throw @"
+-NdkPath is not an NDK root: $NdkPath
+It must hold source.properties and toolchains/llvm/prebuilt/linux-x86_64/bin/clang.
+"@
+        }
+        return (Resolve-Path -LiteralPath $NdkPath).Path
+    }
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    foreach ($variable in @('ANDROID_NDK_HOME', 'ANDROID_NDK_ROOT')) {
+        $value = [Environment]::GetEnvironmentVariable($variable)
+        if ($value) {
+            $candidates.Add($value)
+        }
+    }
+    $candidates.Add((Join-Path $tool_directory 'ndk'))
+    if ($HOME) {
+        $candidates.Add((Join-Path $HOME 'ndk/android-ndk-r27d'))
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-NdkRoot -root $candidate) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+
+    throw @"
+-Target $Target needs the Android NDK (r$expected_ndk_major), and none was found. Searched:
+  -NdkPath, ANDROID_NDK_HOME, ANDROID_NDK_ROOT
+  $(($candidates | Select-Object -Unique) -join "`n  ")
+
+Download android-ndk-r27d-linux.zip from dl.google.com/android/repository,
+unzip it into ~/ndk, or pass -NdkPath.
+"@
+}
+
 if (-not (Test-Path -LiteralPath (Join-Path $skia_root 'include\core\SkCanvas.h'))) {
     throw @"
 The Skia submodule is not initialized: $skia_root
@@ -420,8 +534,11 @@ Run: git submodule update --init third_party/skia
 "@
 }
 
+# win-x64의 파일·디렉터리 이름에는 대상이 없다. 대상이 하나이던 때의 이름을 그대로 둔다.
+$target_part = if ($is_android) { "$Target-" } else { '' }
 if (-not $ArgumentFile) {
-    $ArgumentFile = Join-Path $repository_root ('third_party\skia-args\skia-ui-{0}.gn' -f $Configuration.ToLowerInvariant())
+    $ArgumentFile = Join-Path $repository_root ('third_party\skia-args\skia-ui-{0}{1}.gn' -f `
+            $target_part, $Configuration.ToLowerInvariant())
 }
 if (-not (Test-Path -LiteralPath $ArgumentFile)) {
     throw "The GN argument file was not found: $ArgumentFile"
@@ -448,18 +565,38 @@ $argument_text = (Get-Content -Raw -LiteralPath $ArgumentFile) + "`n" +
 # 셸만 찾고 CreateProcess는 찾지 못한다. PowerShell의 `Get-Command`는 그 launcher도
 # 찾아 주므로 여기서 확장자를 직접 본다 — 그러지 않으면 검사를 통과하고 나서
 # ninja가 한참 돌다가 `FileNotFoundError: [WinError 2]`로 죽는다 (실측).
+#
+# Linux에서는 그 함정이 없다. 이름이 bazelisk인 실행 파일이면 된다. 다만
+# `wsl -- pwsh`처럼 login shell을 거치지 않으면 ~/bin이 PATH에 없으므로 그 자리를
+# 직접 본다.
 function Resolve-Bazelisk {
-    $local = Join-Path $tool_directory 'bazelisk.exe'
-    if (Test-Path -LiteralPath $local -PathType Leaf) {
-        return (Resolve-Path -LiteralPath $local).Path
+    $locals = @(Join-Path $tool_directory ('bazelisk' + $executable_suffix))
+    if (-not $windows_host -and $HOME) {
+        $locals += Join-Path $HOME 'bin/bazelisk'
+    }
+    foreach ($local in $locals) {
+        if (Test-Path -LiteralPath $local -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $local).Path
+        }
     }
     $command = Get-Command -Name 'bazelisk' -CommandType Application -ErrorAction SilentlyContinue |
-        Where-Object { [System.IO.Path]::GetExtension($_.Source) -eq '.exe' } |
+        Where-Object { [System.IO.Path]::GetExtension($_.Source) -eq $executable_suffix } |
         Select-Object -First 1
     if ($command) {
         return $command.Source
     }
 
+    if (-not $windows_host) {
+        throw @"
+-RustPng needs bazelisk, and it was not found. Searched:
+  $($locals -join "`n  ")
+  (PATH)
+
+Download bazelisk-linux-amd64 from github.com/bazelbuild/bazelisk/releases,
+rename it to bazelisk, chmod +x it and put it in ~/bin.
+"@
+    }
+    $local = $locals[0]
     throw @"
 -RustPng needs bazelisk.exe, and it was not found. Searched:
   $local
@@ -490,14 +627,33 @@ $bazelisk = ''
 if ($RustPng) {
     $bazelisk = Resolve-Bazelisk
     # bazel_build.py는 이름만으로 부르므로 그 자리를 PATH 앞에 세운다.
-    $env:PATH = '{0};{1}' -f (Split-Path -Parent $bazelisk), $env:PATH
+    $env:PATH = '{0}{1}{2}' -f (Split-Path -Parent $bazelisk), [System.IO.Path]::PathSeparator, $env:PATH
 }
 
 # 필요한 external은 GN args가 정한다.
-# 최소 구성은 셋이고, 코덱과 텍스트 처리 구성이 그 위에 더한다.
 # 쓰지 않는 external은 요구하지 않는다.
-$required_externals = [System.Collections.Generic.List[string]]@(
-    'd3d12allocator', 'spirv-cross', 'spirv-headers')
+$required_externals = [System.Collections.Generic.List[string]]::new()
+# Direct3D backend의 것이다. spirv-cross는 SkSL을 HLSL로 옮기는 데 쓴다
+# (BUILD.gn의 skia_use_direct3d 갈래).
+if ($argument_text -match 'skia_use_direct3d\s*=\s*true') {
+    $required_externals.Add('d3d12allocator')
+    $required_externals.Add('spirv-cross')
+    $required_externals.Add('spirv-headers')
+}
+# Vulkan 헤더는 Skia 트리 안(include/third_party/vulkan)에 있어 할당기만 든다.
+if ($argument_text -match 'skia_use_vulkan\s*=\s*true') {
+    $required_externals.Add('vulkanmemoryallocator')
+}
+# Android의 시스템 글꼴 길이다. freetype은 컬러 이모지 때문에 libpng을, libpng은
+# zlib을 **png 갈래와 무관하게** 끌어온다 (third_party/freetype2/BUILD.gn).
+if ($argument_text -match 'skia_use_freetype\s*=\s*true') {
+    $required_externals.Add('freetype')
+    $required_externals.Add('libpng')
+    $required_externals.Add('zlib')
+}
+if ($argument_text -match 'skia_use_expat\s*=\s*true') {
+    $required_externals.Add('expat')
+}
 if ($argument_text -match 'skia_use_libjpeg_turbo_decode\s*=\s*true' -or
     $argument_text -match 'skia_use_libjpeg_turbo_encode\s*=\s*true') {
     $required_externals.Add('libjpeg-turbo')
@@ -535,11 +691,13 @@ if ($argument_text -match 'skia_use_icu\s*=\s*true') {
 # python을 먼저 정한다.
 # -FetchTools가 fetch 스크립트를 돌릴 때 쓰는 것도 이것이다.
 $python = Resolve-Python -given $PythonPath
-$gn = Resolve-Tool -given $GnPath -name 'gn' -fetch_script 'fetch-gn' `
-    -hint 'The CIPD package page for gn/gn/windows-amd64 has it.'
+$gn_hint = if ($windows_host) { 'The CIPD package page for gn/gn/windows-amd64 has it.' }
+else { 'The CIPD package page for gn/gn/linux-amd64 has it.' }
+$ninja_hint = if ($windows_host) { 'The ninja-build releases page has ninja-win.zip.' }
+else { 'The ninja-build releases page has ninja-linux.zip.' }
+$gn = Resolve-Tool -given $GnPath -name 'gn' -fetch_script 'fetch-gn' -hint $gn_hint
 $ninja = Resolve-Tool -given $NinjaPath -name 'ninja' -fetch_script 'fetch-ninja' `
-    -hint 'The ninja-build releases page has ninja-win.zip.' `
-    -accept { param($path) Test-NinjaVersion -path $path }
+    -hint $ninja_hint -accept { param($path) Test-NinjaVersion -path $path }
 if ($NinjaPath -and -not (Test-NinjaVersion -path $ninja)) {
     Write-Warning "The given ninja is older than $minimum_ninja_version or reported no version: $ninja"
 }
@@ -549,7 +707,40 @@ if ($NinjaPath -and -not (Test-NinjaVersion -path $ninja)) {
 # clang-cl과 lld-link는 Windows에서도 슬래시 경로를 그대로 받는다.
 $clang_win = ''
 $compiler_version = ''
-if ($Toolchain -eq 'clang') {
+$ndk = ''
+$ndk_revision = ''
+if ($is_android) {
+    $ndk = Resolve-Ndk
+    $ndk_revision = Get-NdkRevision -root $ndk
+    if ($ndk_revision -notmatch "^$expected_ndk_major\.") {
+        Write-Warning ("NDK {0} is not r{1}. Skia's CI builds with r{1}d ({2}); others are untested here." -f `
+                $ndk_revision, $expected_ndk_major, $expected_ndk_revision)
+    }
+    $ndk_clang = Join-Path $ndk 'toolchains/llvm/prebuilt/linux-x86_64/bin/clang'
+    $compiler_version = (& $ndk_clang --version | Select-Object -First 1).Trim()
+    $argument_text += "`nndk = `"{0}`"`n" -f $ndk
+
+    # 이 기계의 절대 경로를 오브젝트에 박지 않는다. Debug의 DWARF가 산출 디렉터리,
+    # external 소스, NDK 시스템 헤더를 절대 경로로 적어 생산자의 사용자 이름이 공개
+    # 자산에 실렸다 (2026-10-02 실측, 13개 아카이브). -ffile-prefix-map이 디버그
+    # 정보와 __FILE__ 양쪽에서 그 앞부분을 이름 하나로 바꾼다. 경로가 이 기계의
+    # 것이므로 args 파일이 아니라 여기서 덧붙이고, pack_skia.ps1이 발행할 때
+    # args.gn에서 그 경로를 다시 가린다. 겹치지 않는 자리만 넣는다 — Skia 트리가
+    # 저장소 안에 있으면 저장소 하나로 덮인다.
+    $prefix_maps = [ordered]@{}
+    $prefix_maps[$repository_root] = 'skia-prep'
+    if (-not $skia_root.StartsWith($repository_root + '/')) {
+        $prefix_maps[$skia_root] = 'skia'
+    }
+    $prefix_maps[$ndk] = 'android-ndk'
+    $prefix_flags = ($prefix_maps.Keys | ForEach-Object {
+            '"-ffile-prefix-map={0}={1}"' -f $_, $prefix_maps[$_]
+        }) -join ', '
+    foreach ($name in @('extra_cflags_c', 'extra_cflags_cc', 'extra_asmflags')) {
+        $argument_text += "{0} = [ {1} ]`n" -f $name, $prefix_flags
+    }
+}
+elseif ($Toolchain -eq 'clang') {
     $clang_win = Resolve-ClangWin
     $compiler_version = (& (Join-Path $clang_win 'bin\clang-cl.exe') --version |
         Select-Object -First 1).Trim()
@@ -557,10 +748,17 @@ if ($Toolchain -eq 'clang') {
 }
 
 Write-Output "Skia root      : $skia_root"
+Write-Output "Target         : $Target"
 Write-Output "Configuration  : $Configuration"
 Write-Output "Argument file  : $ArgumentFile"
 Write-Output "png codec      : $png_flavor ($png_argument_file)"
-Write-Output "toolchain      : $Toolchain"
+if ($ndk) {
+    Write-Output "ndk            : $ndk (r$ndk_revision)"
+    Write-Output "clang          : $compiler_version"
+}
+else {
+    Write-Output "toolchain      : $Toolchain"
+}
 if ($clang_win) {
     Write-Output "clang_win      : $clang_win"
     Write-Output "clang-cl       : $compiler_version"
@@ -573,7 +771,8 @@ Write-Output "ninja          : $ninja"
 Write-Output "python         : $python"
 
 # 1. external 배치.
-#    Skia 저장소를 수정하지 않도록 junction으로 연결한다.
+#    Skia 저장소를 수정하지 않도록 junction(Linux에서는 symlink)으로 연결한다.
+#    Skia의 .gitignore가 third_party/externals를 통째로 무시한다.
 New-Item -ItemType Directory -Force -Path $externals_target | Out-Null
 foreach ($name in ($required_externals | Sort-Object -Unique)) {
     $source = Join-Path $externals_source $name
@@ -585,17 +784,18 @@ Run: git submodule update --init third_party/skia-externals/$name
 "@
     }
 
-    $target = Join-Path $externals_target $name
-    if (Test-Path -LiteralPath $target) {
+    $link_path = Join-Path $externals_target $name
+    if (Test-Path -LiteralPath $link_path) {
         Write-Output "external ready : $name"
         continue
     }
     if ($CopyExternals) {
-        Copy-Item -Recurse -LiteralPath $source -Destination $target
+        Copy-Item -Recurse -LiteralPath $source -Destination $link_path
         Write-Output "external copied: $name"
     }
     else {
-        New-Item -ItemType Junction -Path $target -Target $source | Out-Null
+        $link_type = if ($windows_host) { 'Junction' } else { 'SymbolicLink' }
+        New-Item -ItemType $link_type -Path $link_path -Target $source | Out-Null
         Write-Output "external linked: $name"
     }
 }
@@ -604,22 +804,28 @@ Run: git submodule update --init third_party/skia-externals/$name
 #    **기본 구성에는 패치가 없다.** Skia 152는 손대지 않고 그대로 선다 —
 #    148이 요구하던 Direct3D `operator==` 패치는 152에서 필요 없어졌다
 #    (`GrD3DBackendSurface.cpp`가 더 이상 가드 밖에서 부르지 않는다. Debug로 실측).
-#    rust png 구성만 둘이 필요하다. 하나는 Windows bazel 산출물 이름을 고치고,
-#    다른 하나는 Debug bazel C++ 산출물을 /MTd ABI로 맞춘다
-#    (docs/skia-build.md 5.3).
+#    rust png 구성만 둘이 필요하고, **대상마다 다른 둘이다.** 서로 섞지 않는다 —
+#    Windows의 산출물 이름 패치를 Linux에 걸면 GN의 복사 단계가 없는 .lib을 찾는다.
+#      win-x64       : Windows bazel 산출물 이름을 고치고, Debug bazel C++
+#                      산출물을 /MTd ABI로 맞춘다 (docs/skia-build.md 5.3).
+#      android-arm64 : Rust·crate 목록에 aarch64-linux-android를 더하고(lock째
+#                      고정한다), GN이 Bazel에 Android 플랫폼을 넘긴다
+#                      (docs/skia-build.md 8).
 if ($RustPng) {
-    $patches = @(
-        @{
-            path = Join-Path $repository_root `
-                'third_party\patches\skia-152-bazel-rust-windows-outputs.patch'
-            label = 'rust png outputs'
-        },
-        @{
-            path = Join-Path $repository_root `
-                'third_party\patches\skia-152-bazel-rust-windows-debug-crt.patch'
-            label = 'rust png debug CRT'
-        }
-    )
+    $patch_set = if ($is_android) {
+        @(@('skia-152-bazel-rust-android-triples.patch', 'rust android triples'),
+            @('skia-152-bazel-rust-android-platform.patch', 'rust android platform'))
+    }
+    else {
+        @(@('skia-152-bazel-rust-windows-outputs.patch', 'rust png outputs'),
+            @('skia-152-bazel-rust-windows-debug-crt.patch', 'rust png debug CRT'))
+    }
+    $patches = @($patch_set | ForEach-Object {
+            @{
+                path  = Join-Path $repository_root (Join-Path 'third_party\patches' $_[0])
+                label = $_[1]
+            }
+        })
     foreach ($patch in $patches) {
         if (-not (Test-Path -LiteralPath $patch.path -PathType Leaf)) {
             throw "The rust png patch was not found: $($patch.path)"
@@ -661,8 +867,11 @@ else {
 #    그 아래 인자가 통째로 사라진다. 사라진 인자는 오류가 아니라 **Skia의 기본값**이
 #    되므로(코덱은 기본이 켜짐·system 라이브러리) 링크나 컴파일이 엉뚱한 자리에서
 #    깨진다. 값에 `#`을 쓰는 인자는 없다.
+#    산출 자리는 win-x64가 out/skia-ui-{구성}, 다른 대상이 out/skia-ui-{대상}-{구성}이다.
+#    pack_skia.ps1·verify_skia_root.ps1이 같은 식으로 읽는다. 패키지 안의 배치는
+#    대상과 무관하게 out/skia-ui-{구성}이다 — 그쪽이 소비자의 계약이다.
 $output_directory = Join-Path $skia_root `
-    ('out\skia-ui-{0}{1}' -f $Configuration.ToLowerInvariant(), $OutputSuffix)
+    ('out\skia-ui-{0}{1}{2}' -f $target_part, $Configuration.ToLowerInvariant(), $OutputSuffix)
 $flat_arguments = (($argument_text -split "`r?`n") |
     ForEach-Object { ($_ -replace '(^|\s)#.*$', '').Trim() } |
     Where-Object { $_ }) -join ' '
@@ -699,6 +908,63 @@ finally {
 #    declare_args의 기본값이 ""이고 실제 값은 BUILDCONFIG가 그 뒤에 계산해 넣기
 #    때문이다 — 그 계산 결과가 남는 자리는 컴파일 명령뿐이다. gn이 경로 안의
 #    공백과 콜론을 `$ `·`$:`로 escape하므로 구분자만 느슨하게 본다.
+#
+#    Android의 기록은 갈래가 다르다. MSVC·SDK 대신 NDK 판번과 ndk_api를 적고,
+#    rust 갈래에서는 C++ 브리지를 컴파일한 **Bazel 쪽 NDK의 판번**을 함께 적는다 —
+#    한 아카이브 묶음 안에 두 NDK가 섞여 있다는 사실이 args.gn 어디에도 남지
+#    않기 때문이다. ndk는 이 기계의 경로이므로 pack_skia.ps1이 발행할 때 뺀다.
+if ($is_android) {
+    $ndk_api = if ($argument_text -match '(?m)^\s*ndk_api\s*=\s*(\d+)') { [int]$Matches[1] } else { 21 }
+    $rust_bridge_ndk_revision = ''
+    if ($bazelisk) {
+        Push-Location $skia_root
+        try {
+            $output_base = & $bazelisk info output_base 2>$null
+        }
+        finally {
+            Pop-Location
+        }
+        if ($LASTEXITCODE -eq 0 -and $output_base) {
+            $bazel_ndk = Get-ChildItem -LiteralPath (Join-Path "$output_base".Trim() 'external') `
+                -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like '*ndk_linux_amd64*' } |
+                Select-Object -First 1
+            if ($bazel_ndk) {
+                $rust_bridge_ndk_revision = Get-NdkRevision -root $bazel_ndk.FullName
+            }
+        }
+        if (-not $rust_bridge_ndk_revision) {
+            Write-Warning 'The NDK that Bazel used for the rust bridge was not found; toolchain.json leaves it empty.'
+        }
+    }
+    $toolchain_record = [ordered]@{
+        schema                   = 1
+        target                   = $Target
+        toolchain                = 'ndk'
+        compiler                 = 'clang'
+        compiler_version         = $compiler_version
+        linker                   = 'lld'
+        ndk                      = $ndk
+        ndk_revision             = $ndk_revision
+        ndk_api                  = $ndk_api
+        rust_bridge_ndk_revision = $rust_bridge_ndk_revision
+        configuration            = $Configuration
+        png_codec                = $png_flavor
+        built_at                 = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    }
+    Set-Content -LiteralPath (Join-Path $output_directory 'toolchain.json') `
+        -Value ($toolchain_record | ConvertTo-Json -Depth 4) -Encoding UTF8
+
+    Write-Output ''
+    Write-Output "Skia build finished: $output_directory"
+    Write-Output ("toolchain      : clang ({0}), NDK r{1}, ndk_api {2}" -f $compiler_version, $ndk_revision, $ndk_api)
+    if ($rust_bridge_ndk_revision) {
+        Write-Output "rust bridge    : NDK r$rust_bridge_ndk_revision (Bazel's own)"
+    }
+    Write-Output "Verify it with: scripts/verify_skia_root.ps1 -Target $Target"
+    return
+}
+
 $generated = @('toolchain.ninja', 'build.ninja', 'obj\core.ninja') |
     ForEach-Object { Join-Path $output_directory $_ } |
     Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
