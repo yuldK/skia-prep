@@ -130,8 +130,13 @@ gh release create skia-152-0873ec164a06-r2 `
     build\skia-prep-0873ec164a06-r2-win-x64-release.zip `
     build\skia-prep-0873ec164a06-r2-win-x64-debug.zip `
     --title "Skia 152 (0873ec164a06) win-x64 r2 - clang-cl SIMD" `
-    --notes-file build\skia-package\VERSION.json
+    --notes-file build\release\NOTES.md
 ```
+
+**릴리스 본문은 Markdown으로 따로 쓴다.** `VERSION.json`을 `--notes-file`로 넘기면
+JSON이 서식 없이 그대로 노출된다 (android-arm64 r1에서 그랬다). 본문에는 대상·Skia
+commit·도구사슬·판번이 무엇을 바꿨는가·자산의 SHA-256·소비자가 지킬 것을 적고,
+`VERSION.json` 자체는 패키지 안에 있으므로 본문에 싣지 않는다.
 
 `gh`가 없으면 GitHub의 릴리스 화면에서 zip 둘을 끌어다 놓아도 된다. 릴리스 자산은
 파일 하나에 2 GB까지라 204 MB짜리 Debug도 그대로 올라간다.
@@ -235,8 +240,15 @@ gh release create skia-152-0873ec164a06-android-arm64-r1 `
     \\wsl.localhost\Ubuntu-24.04\home\<사용자>\skia-prep\build\skia-prep-0873ec164a06-r1-android-arm64-release.zip `
     \\wsl.localhost\Ubuntu-24.04\home\<사용자>\skia-prep\build\skia-prep-0873ec164a06-r1-android-arm64-debug.zip `
     --title "Skia 152 (0873ec164a06) android-arm64 r1" `
-    --notes-file \\wsl.localhost\Ubuntu-24.04\home\<사용자>\skia-prep\build\skia-package\VERSION.json
+    --notes-file NOTES.md
 ```
+
+`NOTES.md`는 Markdown 본문이다 (5장). `--target`을 줄 때는 전체 SHA(40자)나 브랜치
+이름을 준다 — 짧은 SHA는 GitHub API가 `HTTP 422`로 거부한다.
+
+**Latest가 바뀐다.** `gh`는 새 릴리스를 Latest로 표시하므로, Android 릴리스를 내면
+저장소 첫 화면의 Latest가 Android 자산이 된다. luil의 핀은 태그를 직접 가리키므로
+받는 데는 영향이 없다. Windows 릴리스를 Latest로 두려면 `--latest=false`를 준다.
 
 Windows의 태그(`skia-152-0873ec164a06-r2`)는 대상을 넣기 전에 지은 이름이라 그대로 둔다.
 
