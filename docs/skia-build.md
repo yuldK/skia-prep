@@ -517,6 +517,14 @@ Skia 152의 `BUILD.gn`에서 `:png_encode_rust`를 deps에 넣는 target이 `opt
 `:png_decode_rust`는 있고 `:png_encode_rust`는 없다 — 디코더 쪽만 대칭이 맞춰져
 있다. 버전을 올린다고 저절로 풀리지 않으므로, 그때 다시 뒤지지 않도록 적어 둔다.
 
+**Android 갈래에서는 이 구멍이 없다** (2026-10-02 실측). 시스템 폰트를 읽으려고
+`skia_use_expat = true`를 켜는데, 그것이 바로 `:xml`을 켜서 `:png_encode_rust`가
+함께 들어온다. `libskia.a`에 `SkPngRustEncoder::Encode`가 정의돼 있고, Android용
+시험 프로그램(`tools/android_probe.cpp`)이 그것을 불러 링크된다. 같은 심볼이 rust
+아카이브에 함께 담긴 Skia 오브젝트에서 온 것이 아님도 `llvm-nm`으로 확인했다.
+Windows 갈래만의 구멍이라는 뜻이다. Windows에서 expat을 켜서 풀지는 않는다 —
+쓰지 않는 xml 파서와 그 고지를 들이게 된다.
+
 ## 6. 텍스트 처리 구성 (선택)
 
 현재 luil은 `drawSimpleText`와 `measureText`만 사용해 shaping engine이 필요하지 않다. `SkShaper`나 `SkParagraph`를 도입할 때 이 구성을 쓴다.
