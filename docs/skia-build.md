@@ -655,6 +655,8 @@ pwsh scripts/pack_skia.ps1 -Target android-arm64 -Configuration Debug -Destinati
 submodule로 다시 받은 저장소 — 에서 이 다섯 줄이 패치를 걸고, external을 symlink로
 놓고, 두 구성을 세우고, 검증하고, 압축하는 데 88초였다 (32코어, Bazel 캐시가 데워진
 상태). Bazel 캐시가 비어 있으면 첫 빌드가 도구사슬과 crate를 받느라 몇 분 더 든다.
+그 실행은 8.7의 조치보다 앞선 것이고, 아래 크기는 조치 뒤에 다시 세우고 다시 싸서 잰
+것이다.
 
 | 자산 | 압축 | 푼 뒤 |
 | --- | --- | --- |
@@ -765,8 +767,7 @@ android_probe passed
 ### 8.7 생산자의 경로를 싣지 않는다
 
 공개 자산이다. 처음 세운 Android 패키지에는 생산자의 홈 디렉터리
-(`/home/<사용자>`)가 세 갈래로 실려 있었다. Windows 패키지에는 없던 일이다
-(Release·Debug 모두 대조했다).
+(`/home/<사용자>`)가 세 갈래로 실려 있었다.
 
 | 자리 | 무엇이 | 막는 법 |
 | --- | --- | --- |
@@ -782,4 +783,17 @@ rust 쪽을 빌드 때 고치지 않는 것은, Bazel의 C++과 rustc 양쪽에 
 마지막 그물은 `pack_skia.ps1`의 검사다. 압축하기 전에 패키지의 모든 파일에서
 이 기계의 경로(`$HOME`·`_bazel_$USER`, Windows에서는 `%USERPROFILE%`)를 바이트로
 찾고, 하나라도 있으면 **압축하지 않고 멈춘다.** 위의 표가 그 검사에 걸려 찾은
-것이다.
+것이다. 조치 뒤의 Android 패키지는 Release·Debug 모두 사용자 이름이 대소문자
+어느 쪽으로도 나오지 않는다.
+
+**Windows 패키지에는 이 검사가 눈이 어둡다 (2026-10-02 확인).** Release에는 사용자
+이름이 없다. Debug에는 있다 — 발행한 r2 Debug 자산도 같다.
+
+| Windows Debug의 자리 | 무엇이 |
+| --- | --- |
+| GN이 세운 `.lib` 열 | `/Z7` 디버그 정보의 저장소 경로 (`E:\…\<사용자>\skia-prep\…` — 저장소가 사용자 이름의 폴더 아래에 있다) |
+| `librust_png_ffi_rs.a` | Bazel의 출력 경로 (`c:\users\<사용자>\_bazel_<사용자>\…`, Bazel이 소문자로 적는다) |
+
+검사가 그것을 놓친 것은 표지가 `%USERPROFILE%` 하나이고 대소문자를 가리기 때문이다.
+표지를 늘리면 지금의 Windows Debug는 압축되지 않으므로, 그 갈래를 고치는 것(Windows의
+prefix map, Bazel 아카이브의 디버그 정보)과 함께 따로 한다.
