@@ -1,14 +1,14 @@
 # skia-prep
 
-`skia-ui`가 쓰는 **Skia prebuilt 패키지를 만드는 저장소**다.
+`luil`이 쓰는 **Skia prebuilt 패키지를 만드는 저장소**다.
 
 Skia를 소스로 세우는 데 드는 것 — submodule 5 GB, git 이력 4.7 GB, rust png를 쓰면
-bazel 캐시 15 GB — 을 이 저장소 하나가 떠안는다. `skia-ui`를 쓰는 사람은 이 저장소를
+bazel 캐시 15 GB — 을 이 저장소 하나가 떠안는다. `luil`을 쓰는 사람은 이 저장소를
 받지 않는다. 릴리스에 올라간 **자산(zip) 하나**만 받으면 된다.
 
 | | 받는 것 |
 | --- | --- |
-| skia-ui 소비자 | 릴리스 자산 zip 1개 (Release 20 MB · Debug 136 MB) |
+| luil 소비자 | 릴리스 자산 zip 1개 (Release 20 MB · Debug 136 MB) |
 | 이 저장소의 생산자 | submodule 전부 + clang-cl·gn·ninja (+ rust png면 bazelisk) |
 
 > 이 저장소가 내는 것은 **Google과 무관한 비공식 빌드**다. Skia의 BSD-3-Clause 3항에
@@ -74,7 +74,7 @@ clang-cl로 세우면 `SkOpts::Init()`의 실행 시점 판정이 AVX2 갈래(�
 16)로 바꿔 끼운다. 4000×7000 이미지의 cubic 축소가 실측에서 800 ms에서 14 ms로
 줄었다. 자세한 것과 재는 법은 [docs/skia-build.md](docs/skia-build.md) 5.4에 있다.
 
-**`-RustPng`이 발행하는 갈래다.** skia-ui가 그것을 요구 인자로 못 박았다 —
+**`-RustPng`이 발행하는 갈래다.** luil이 그것을 요구 인자로 못 박았다 —
 APNG(움직이는 png)를 읽는 코덱이 rust뿐이기 때문이다. 그쪽은 bazelisk가 필요하고
 캐시가 15 GB까지 자라므로 **GitHub Actions의 호스팅 러너(SSD 14 GB)에서는 세울 수
 없다.** 그래서 이 저장소는 CI로 발행하지 않고 생산자가 자기 기계에서 빌드해 릴리스를
@@ -82,7 +82,7 @@ APNG(움직이는 png)를 읽는 코덱이 rust뿐이기 때문이다. 그쪽은
 
 `-RustPng` 없이 세우는 libpng 갈래는 **물러설 자리로만** 남겨 둔다. Skia의 rust
 경로는 148~151에서 서지 않았고(152가 고쳤다) 뒷날 다시 막힐 수 있다. 그때 이쪽으로
-패키지를 만들고 skia-ui에서 요구 인자 한 줄을 뺀다. 그 갈래의 zip은 이름에
+패키지를 만들고 luil에서 요구 인자 한 줄을 뺀다. 그 갈래의 zip은 이름에
 `-libpng`이 붙어 rust 갈래와 구별된다 — 서로 링크 호환되지 않는다.
 
 발행 절차는 [docs/publishing.md](docs/publishing.md)에 있다.

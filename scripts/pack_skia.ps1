@@ -2,12 +2,12 @@
 #
 # 소비자는 Skia 소스 트리도, external submodule도, gn·ninja·bazelisk도 필요 없다.
 # 필요한 것은 헤더와 정적 라이브러리와 고지뿐이고, 이 스크립트가 그것만 뽑는다.
-# 실측: Skia 트리 1,891 MB → 패키지 111 MB (Release). 그 패키지만으로 skia-ui와
+# 실측: Skia 트리 1,891 MB → 패키지 111 MB (Release). 그 패키지만으로 당시 소비자였던 skia-ui와
 # 예제 실행 파일이 전부 빌드된다.
 #
 # 나오는 것의 배치는 **Skia 트리와 같다.** 그래서 소비자의
 # cmake/dependencies/skia.cmake가 이 패키지를 Skia 트리와 구별하지 않는다 —
-# SKIA_UI_SKIA_ROOT를 여기로 돌리는 것으로 끝난다.
+# LUIL_SKIA_ROOT를 여기로 돌리는 것으로 끝난다.
 #
 #   package/
 #     include/              Skia 공개 헤더 (include/third_party/ 는 뺀다)
@@ -20,7 +20,7 @@
 #
 # NOTICE.md를 패키지가 스스로 들고 다니는 이유는 고지 의무 때문이다.
 # 소비자에게는 Skia의 third_party/externals가 없으므로 거기서 라이선스 원문을
-# 읽을 수 없다. 그 자리에서 읽던 skia-ui의 generate_notices.cmake도 이 파일
+# 읽을 수 없다. 그 자리에서 읽던 소비자의 generate_notices.cmake도 이 파일
 # 하나를 읽는 쪽으로 옮겨 간다.
 
 [CmdletBinding()]
@@ -66,7 +66,7 @@ if (-not $Destination) {
     $Destination = Join-Path $repository_root 'build\skia-package'
 }
 
-# CMakeLists.txt의 SKIA_UI_SKIA_COMPONENTS와 같은 목록이다 (파일 이름 그대로).
+# luil CMakeLists.txt의 LUIL_SKIA_COMPONENTS에서 png 갈래 몫을 뺀 목록이다 (파일 이름 그대로).
 # verify_skia_root.ps1도 같은 목록을 갖는다.
 $components = @(
     'skia.lib', 'skcms.lib', 'spirv_cross.lib', 'd3d12allocator.lib',
@@ -92,7 +92,7 @@ $externals_root = Join-Path $skia_root 'third_party\externals'
 
 # 정적으로 들어가는 것의 고지다. 순서가 NOTICE.md의 순서다.
 #
-# 여기 담긴 것 중 셋은 skia-ui의 generate_notices.cmake에 **없던 것**이다.
+# 여기 담긴 것 중 셋은 당시 소비자였던 skia-ui의 generate_notices.cmake에 **없던 것**이다.
 #  - libjpeg-turbo의 README.ijg : LICENSE.md는 IJG 라이선스를 참조만 하고
 #    원문은 이 파일에 있다. IJG 라이선스는 문서에 원문 동봉을 요구한다.
 #  - d3d12allocator의 NOTICES.txt : LICENSE.txt만 읽고 있었다.
@@ -549,7 +549,7 @@ if ($Archive) {
     $suffix = if ($skia_commit) { $skia_commit.Substring(0, 12) } else { 'unknown' }
     $flavour = ($configurations | ForEach-Object { $_.ToLowerInvariant() }) -join '-'
     # png 갈래는 이름에 넣지 **않는다** — 발행하는 것은 rust 코덱 갈래 하나뿐이고
-    # (skia-ui의 SKIA_UI_SKIA_REQUIRED_ARGUMENTS가 그것을 요구한다), 소비자에게
+    # (luil의 LUIL_SKIA_REQUIRED_ARGUMENTS가 그것을 요구한다), 소비자에게
     # 고를 것이 없는 값을 파일 이름에 담아 봐야 "Rust로 빌드한 Skia"로 오해될 뿐이다.
     #
     # libpng 갈래는 물러설 자리로만 남아 있다. 그쪽으로 만들면 이름이 갈려야 한다 —

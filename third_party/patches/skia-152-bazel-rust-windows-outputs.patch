@@ -2,7 +2,7 @@ Windows bazel makes MSVC archives, but the GN copy step looks for the Linux and 
 names. Every rust build then fails after bazel has already succeeded, in the copy.
 
 Only the source paths change. The destinations keep the lib*.a names so the artifact
-list in this repository (SKIA_UI_SKIA_RUST_PNG_COMPONENTS) stays as it is.
+list the consumer checks (luil's LUIL_SKIA_COMPONENTS) stays as it is.
 
 Only the -RustPng configuration reads this block, so the default build never needs it.
 

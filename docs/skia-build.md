@@ -1,6 +1,6 @@
 # Skia 준비 안내
 
-skia-ui는 Skia를 자동으로 내려받거나 빌드하지 않는다.
+luil은 Skia를 자동으로 내려받거나 빌드하지 않는다.
 
 사용자가 1회 직접 빌드하고, CMake는 그 산출물을 검사해 연결만 한다.
 
@@ -8,9 +8,9 @@ skia-ui는 Skia를 자동으로 내려받거나 빌드하지 않는다.
 
 ```powershell
 cmake --preset vs2026 `
-    -DSKIA_UI_SKIA_ROOT=<기존 Skia 트리> `
-    -DSKIA_UI_SKIA_BUILD_DEBUG=<Debug 산출물 디렉터리> `
-    -DSKIA_UI_SKIA_BUILD_RELEASE=<Release 산출물 디렉터리>
+    -DLUIL_SKIA_ROOT=<기존 Skia 트리> `
+    -DLUIL_SKIA_BUILD_DEBUG=<Debug 산출물 디렉터리> `
+    -DLUIL_SKIA_BUILD_RELEASE=<Release 산출물 디렉터리>
 ```
 
 ## 1. 필요한 것
@@ -116,7 +116,7 @@ scripts\bench_skia.ps1 -Configuration Release -Baseline '-msvc' -Candidate ''
 ```
 
 이미 준비해 둔 Skia 트리가 다른 자리에 있으면 `-SkiaRoot`로 가리킨다. CMake 쪽의
-`SKIA_UI_SKIA_ROOT`와 짝이 되는 손잡이다.
+`LUIL_SKIA_ROOT`와 짝이 되는 손잡이다.
 
 ```powershell
 scripts\build_skia.ps1 -Configuration Release -SkiaRoot D:\src\skia
@@ -180,7 +180,7 @@ git -C third_party\skia apply ..\patches\skia-152-bazel-rust-windows-outputs.pat
 git -C third_party\skia apply ..\patches\skia-152-bazel-rust-windows-debug-crt.patch
 ```
 
-Windows bazel은 `rust/png/ffi_rs.lib`과 `…/cxx_cc.lib`(MSVC 이름)을 내는데 GN의 복사 단계는 `libffi_rs.a`·`libcxx_cc.a`(Linux·mac 이름)를 찾는다. **bazel이 성공한 뒤** 복사에서 죽으므로 원인이 멀어 보인다. 출처 경로 두 줄만 바꾸고 목적지 이름은 그대로 두어, 이 저장소의 산출물 목록(`SKIA_UI_SKIA_RUST_PNG_COMPONENTS`)은 바뀌지 않는다.
+Windows bazel은 `rust/png/ffi_rs.lib`과 `…/cxx_cc.lib`(MSVC 이름)을 내는데 GN의 복사 단계는 `libffi_rs.a`·`libcxx_cc.a`(Linux·mac 이름)를 찾는다. **bazel이 성공한 뒤** 복사에서 죽으므로 원인이 멀어 보인다. 출처 경로 두 줄만 바꾸고 목적지 이름은 그대로 두어, 소비자의 산출물 목록(luil의 `LUIL_SKIA_COMPONENTS`)은 바뀌지 않는다.
 
 두 번째 패치는 Debug의 Bazel C++ bridge에도 `_DEBUG`와
 `_ITERATOR_DEBUG_LEVEL=2`를 넘긴다. Skia의 Windows hermetic Clang toolchain은
@@ -241,7 +241,7 @@ ninja -C third_party\skia\out\skia-ui-release skia
 | `is_trivial_abi = false` | **clang으로 세우는 동안의 ABI 계약이다** (5.4). MSVC에서는 값이 무엇이든 무해했다 |
 | `skia_use_partition_alloc = false` | 기본값이 `is_clang`이다. 도구사슬을 바꾸는 것만으로 켜져 `partition_alloc` external을 새로 요구하고 (없으면 `gn gen`이 거기서 죽는다), Skia 안의 `raw_ptr`을 noop에서 실물로 바꾼다 (실측) |
 
-코덱을 켜면 산출물도 늘어난다. `CMakeLists.txt`의 `SKIA_UI_SKIA_COMPONENTS`가 그
+코덱을 켜면 산출물도 늘어난다. luil `CMakeLists.txt`의 `LUIL_SKIA_COMPONENTS`가 그
 목록이고 `scripts/verify_skia_root.ps1`이 같은 목록을 검사한다.
 
 | 산출물 | 무엇인가 |
@@ -314,7 +314,7 @@ scripts\build_skia.ps1 -Configuration Release -RustPng
 ### 5.3 `-RustPng`이 요구하는 것 (2026-09-03 실측)
 
 이 저장소가 고정한 Skia(152)에서 rust png는 **선다.** APNG가 두 장으로 디코드되고
-(`frame_count() == 2`, 표시 시간 120 ms) skia-ui의 test가 전부 통과하는 것까지
+(`frame_count() == 2`, 표시 시간 120 ms) 당시 소비자였던 skia-ui의 test가 전부 통과하는 것까지
 확인했다. 필요한 것은 넷이다.
 
 1. **`bazelisk.exe`** (1장). launcher로는 안 된다 — 5.2에 이유가 있다.
@@ -322,7 +322,7 @@ scripts\build_skia.ps1 -Configuration Release -RustPng
    적용한다 (4.2).
 3. **`skia-152-bazel-rust-windows-debug-crt.patch`** — Debug에서 Bazel C++ bridge를
    `/MTd` ABI(iterator level 2)로 맞춘다.
-4. **`ws2_32`·`userenv`·`ntdll`** — `SKIA_UI_SKIA_RUST_PNG_SYSTEM_LIBRARIES`가 rust
+4. **`ws2_32`·`userenv`·`ntdll`** — `LUIL_SKIA_RUST_PNG_SYSTEM_LIBRARIES`가 rust
    갈래에서만 링크한다. rustc는 std가 쓰는 시스템 라이브러리를 `#[link]` 지시로
    심는데, bazel이 낸 정적 아카이브를 CMake가 직접 링크하면 그 지시가 링커에 닿지
    않는다. 실측한 미해결 기호 열여덟 개가 정확히 이 셋으로 떨어진다 — 소켓
@@ -509,7 +509,7 @@ Skia 152의 `BUILD.gn`에서 `:png_encode_rust`를 deps에 넣는 target이 `opt
 `:skia` component가 직접 들고 있어 대칭이 아니다.
 
 **도구사슬과 무관하다.** MSVC로 세운 것과 clang-cl로 세운 것에서 똑같이 비어 있는
-것을 확인했다. skia-ui가 png를 인코딩하지 않으므로 지금 막히는 자리는 없고, 필요해질
+것을 확인했다. luil이 png를 인코딩하지 않으므로 지금 막히는 자리는 없고, 필요해질
 때 `:skia`의 deps에 한 줄을 더하는 패치로 푼다.
 
 **뒷 판번에서도 그대로다** (2026-09-11에 upstream의 `BUILD.gn`을 직접 읽어 확인했다).
@@ -519,7 +519,7 @@ Skia 152의 `BUILD.gn`에서 `:png_encode_rust`를 deps에 넣는 target이 `opt
 
 ## 6. 텍스트 처리 구성 (선택)
 
-현재 skia-ui는 `drawSimpleText`와 `measureText`만 사용해 shaping engine이 필요하지 않다. `SkShaper`나 `SkParagraph`를 도입할 때 이 구성을 쓴다.
+현재 luil은 `drawSimpleText`와 `measureText`만 사용해 shaping engine이 필요하지 않다. `SkShaper`나 `SkParagraph`를 도입할 때 이 구성을 쓴다.
 
 `third_party/skia-args/skia-ui-release-text.gn`이 `skia_use_harfbuzz = true`와 `skia_use_libgrapheme = true`를 켠 변형이다. submodule 셋을 추가로 받는다.
 

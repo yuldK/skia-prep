@@ -1,4 +1,4 @@
-# 사용자가 빌드한 Skia가 skia-ui와 맞는지 검사한다.
+# 사용자가 빌드한 Skia가 luil과 맞는지 검사한다.
 # CMake의 configure 검사와 같은 판정을 사람이 먼저 돌려볼 수 있게 하는 것이 목적이다.
 # docs/skia-build.md를 본다.
 
@@ -18,7 +18,7 @@ if (-not $SkiaRoot) {
     $SkiaRoot = Join-Path $repository_root 'third_party\skia'
 }
 
-# CMakeLists.txt의 SKIA_UI_SKIA_COMPONENTS와 같은 목록이다 (파일 이름 그대로).
+# luil CMakeLists.txt의 LUIL_SKIA_COMPONENTS에서 png 갈래 몫을 뺀 목록이다 (파일 이름 그대로).
 $components = @(
     'skia.lib', 'skcms.lib', 'spirv_cross.lib', 'd3d12allocator.lib',
     'libjpeg.lib', 'libjpeg12.lib', 'libjpeg16.lib',
@@ -29,7 +29,7 @@ $rust_png_components = @('librust_png_ffi_rs.a', 'libcxx_cc.a')
 # 이 저장소가 고정한 Skia의 밀번이다 (docs/skia-build.md 7).
 # rust png 갈래는 152 아래에서 아예 서지 않는다 (5.3).
 $minimum_milestone = 152
-# CMakeLists.txt의 SKIA_UI_SKIA_REQUIRED_ARGUMENTS와 같은 목록이다.
+# luil CMakeLists.txt의 LUIL_SKIA_REQUIRED_ARGUMENTS와 같은 목록이다.
 # png은 둘 중 하나라 여기 없다 — 아래에서 따로 판정한다.
 $required_arguments = @(
     @{ name = 'skia_use_direct3d'; reason = 'required by the renderer' },
@@ -241,7 +241,7 @@ foreach ($configuration in $Configurations) {
                 $toolchain.compiler_version, $toolchain.msvc_version, $toolchain.windows_sdk))
     }
 
-    # 정적 CRT가 skia-ui와 어긋나면 LNK2038로 드러난다.
+    # 정적 CRT가 luil과 어긋나면 LNK2038로 드러난다.
     # 미리 잡는다.
     #
     # 이름이 두 가지다. MSVC의 CRT 헤더는 `LIBCMT`를 pragma로 심고, clang-cl은

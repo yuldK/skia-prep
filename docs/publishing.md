@@ -5,7 +5,7 @@
 이유는 rust png다. Skia의 rust 코덱은 Bazel로 서고, bazel이 hermetic clang과 Windows
 SDK 묶음까지 받아 캐시가 15 GB까지 자란다. GitHub의 호스팅 Windows 러너는 SSD가
 14 GB뿐이라 그 구성이 들어가지 않는다. 그리고 **발행하는 것은 rust 갈래다** —
-skia-ui가 `skia_use_rust_png_decode=true`를 요구 인자로 못 박았고, APNG를 읽는 코덱이
+luil이 `skia_use_rust_png_decode=true`를 요구 인자로 못 박았고, APNG를 읽는 코덱이
 그것뿐이다.
 
 ## 1. 준비
@@ -133,7 +133,7 @@ GitHub이 아닌 자리(사내 파일 서버 등)에 올려도 된다. 소비자
 
 ## 6. 소비자 핀 갱신
 
-`skia-ui`의 `third_party/skia-prep.json`을 새 값으로 고친다.
+`luil`의 `third_party/skia-prep.json`을 새 값으로 고친다.
 
 ```json
 {
