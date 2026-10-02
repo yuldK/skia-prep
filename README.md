@@ -8,8 +8,15 @@ bazel 캐시 15 GB — 을 이 저장소 하나가 떠안는다. `luil`을 쓰�
 
 | | 받는 것 |
 | --- | --- |
-| luil 소비자 | 릴리스 자산 zip 1개 (Release 20 MB · Debug 136 MB) |
-| 이 저장소의 생산자 | submodule 전부 + clang-cl·gn·ninja (+ rust png면 bazelisk) |
+| luil 소비자 | 대상·구성마다 릴리스 자산 zip 1개 |
+| 이 저장소의 생산자 | submodule 전부 + gn·ninja·bazelisk, 그리고 대상의 컴파일러 |
+
+| 대상 | 세우는 곳 | 컴파일러 | GPU | Release · Debug zip |
+| --- | --- | --- | --- | --- |
+| `win-x64` | Windows | clang-cl | Direct3D | 20.5 MB · 136 MB |
+| `android-arm64` | Linux (WSL2) | NDK r27d clang | Vulkan | 16.3 MB · 48.1 MB |
+
+iOS는 아직 없다. Skia의 iOS Bazel 도구사슬이 macOS에서만 돌아 Mac이 필요하다.
 
 > 이 저장소가 내는 것은 **Google과 무관한 비공식 빌드**다. Skia의 BSD-3-Clause 3항에
 > 따라 저작권자와 기여자의 이름을 이 배포물의 홍보에 쓰지 않는다. Skia는 Google이
@@ -28,9 +35,12 @@ LICENSE               Skia 원문. 헤더가 소스 형태로 나가므로 필�
 NOTICE.md             정적으로 들어간 모든 것의 고지를 모은 한 장
 licenses/rust/        rust 갈래에서만. Rust 표준 라이브러리 고지
 VERSION.json          Skia commit·밀번·png 갈래·도구사슬·패키지 판번·파일별 SHA-256
-out/skia-ui-release/  *.lib *.a args.gn toolchain.json
+out/skia-ui-release/  *.lib *.a args.gn toolchain.json   (Android는 *.a뿐이다)
 out/skia-ui-debug/    (Debug 패키지)
 ```
+
+배치는 대상과 무관하게 같다. 대상은 패키지마다 하나이고 `VERSION.json`의 `target`과
+자산 이름이 그것을 말한다.
 
 `args.gn`을 함께 싣는 것이 구성 계약이다. 소비자는 그것을 읽어 자기가 요구하는
 기능(Direct3D·코덱)으로 빌드된 패키지인지 configure 시점에 판정한다.
@@ -85,6 +95,27 @@ APNG(움직이는 png)를 읽는 코덱이 rust뿐이기 때문이다. 그쪽은
 패키지를 만들고 luil에서 요구 인자 한 줄을 뺀다. 그 갈래의 zip은 이름에
 `-libpng`이 붙어 rust 갈래와 구별된다 — 서로 링크 호환되지 않는다.
 
+### Android
+
+같은 스크립트를 **Linux에서** `pwsh`로 돌린다. rust png의 Bazel NDK 도구사슬이 linux
+x86_64 호스트에서만 돌기 때문이다 — WSL2면 된다. submodule은 Windows의 셋(D3D12MA·
+SPIRV 둘) 대신 `vulkanmemoryallocator`·`freetype`·`expat`을 받는다.
+
+```bash
+pwsh scripts/build_skia.ps1 -Target android-arm64 -Configuration Release -RustPng
+pwsh scripts/build_skia.ps1 -Target android-arm64 -Configuration Debug   -RustPng
+pwsh scripts/verify_skia_root.ps1 -Target android-arm64
+pwsh scripts/pack_skia.ps1 -Target android-arm64 -Configuration Release -Archive
+pwsh scripts/pack_skia.ps1 -Target android-arm64 -Configuration Debug -Destination build/skia-package-debug -Archive
+```
+
+Skia 152를 그대로는 세울 수 없어 패치 둘을 건다 (Rust·crate의 대상 목록, Bazel에
+넘기는 플랫폼). 소비자는 `-Wl,--allow-multiple-definition`과 `-landroid -llog`로
+링크해야 하고, Vulkan 메모리 할당기를 직접 넘겨야 한다. 준비와 실측과 소비자의
+계약은 [docs/skia-build.md](docs/skia-build.md) 8장에 있다.
+`tools/android_probe.cpp`가 기기 위에서 래스터·rust png·시스템 글꼴·Vulkan을 밟아
+확인한다 (실기기에서 통과).
+
 발행 절차는 [docs/publishing.md](docs/publishing.md)에 있다.
 
 ## 라이선스
@@ -97,3 +128,9 @@ Skia와 그 external, rust 갈래에서는 crate와 Rust 표준 라이브러리�
 Wuffs), MIT(SPIRV-Headers·D3D12MemoryAllocator), IJG + BSD-3(libjpeg-turbo),
 PNG Reference Library License v2(libpng), Zlib(zlib), 그리고 rust 갈래의
 MIT / Apache-2.0 / 0BSD / Zlib crate들. 상호주의 조항은 없다.
+
+Android 패키지에는 넷이 더 들어간다: MIT(Vulkan Memory Allocator·Expat),
+Apache-2.0(NDK의 cpu-features), 그리고 FreeType. FreeType은 FTL과 GPLv2 중 하나를
+고르는 이중 라이선스이고 이 패키지는 **FTL을 고른다.** FTL은 상호주의가 아니지만
+**제품 문서에 FreeType을 밝히라고 요구한다** — 그 의무는 이 패키지로 앱을 내는
+쪽이 진다. 권하는 문구는 패키지의 `NOTICE.md` 머리에 있다.

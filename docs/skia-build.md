@@ -2,6 +2,9 @@
 
 luil은 Skia를 자동으로 내려받거나 빌드하지 않는다.
 
+1~7장은 Windows 대상(`win-x64`)의 것이다. Android 대상(`android-arm64`)은 Linux에서
+세우고, 다른 것만 8장에 모았다.
+
 사용자가 1회 직접 빌드하고, CMake는 그 산출물을 검사해 연결만 한다.
 
 이미 같은 인자로 빌드해 둔 Skia가 있다면 다시 빌드할 필요 없이 캐시 변수로 그 위치를 가리킨다.
@@ -163,7 +166,7 @@ third_party/skia/third_party/externals/zlib            ->  third_party/skia-exte
 무엇이 필요한지는 GN args가 정한다. 스크립트가 인자 파일을 읽어 켜진 코덱의
 external만 요구하므로, `-RustPng` 구성에서는 `libpng`·`zlib`을 묻지 않는다.
 
-Skia 저장소의 `.gitignore`가 `third_party/externals`를 무시하므로 submodule이 dirty로 표시되지 않는다. junction을 만들 수 없는 환경은 `-CopyExternals`로 복사한다.
+Skia 저장소의 `.gitignore`가 `third_party/externals`를 무시하므로 submodule이 dirty로 표시되지 않는다. junction을 만들 수 없는 환경은 `-CopyExternals`로 복사한다. Linux(Android 대상)에서는 junction 대신 symlink를 놓는다.
 
 `tools/git-sync-deps`는 사용하지 않는다. DEPS의 나머지 external은 아래 GN args에서 전부 꺼져 있어 필요하지 않다.
 
@@ -559,7 +562,8 @@ git -C third_party\skia-externals\unicodetools sparse-checkout set unicodetools/
 - `third_party/patches/`의 패치가 여전히 필요하고 적용되는지
 - `third_party/skia-args/`의 GN args
 - `scripts/verify_skia_root.ps1`의 `$minimum_milestone`
-- `scripts/pack_skia.ps1`의 `$package_revision` — commit이 바뀌면 1로 되돌린다 (5.4)
+- `scripts/pack_skia.ps1`의 `$package_revisions` — 대상마다 따로 세며, commit이 바뀌면 모두 1로 되돌린다 (5.4)
+- `third_party/rust-licenses/<대상>` — crate 목록이 바뀌면 대상마다 다시 뜬다 (8.4)
 
 갱신 후에는 configure, 빌드, 전체 CTest, 한국어와 Codicon 렌더링 육안 검증을 모두 수행한다.
 
@@ -581,3 +585,201 @@ git -C third_party\skia-externals\unicodetools sparse-checkout set unicodetools/
 submodule이 초기화되어 있지 않다. 그래도 맞춰 두는 이유는 m152의
 `third_party/icu/icu.gni`가 `common/fixedstring.cpp`·`.h`를 새로 요구해 **옛 핀으로는
 그 구성이 깨지기** 때문이다 — 쓰기 시작하는 날 원인을 다시 찾지 않게 한다.
+
+## 8. Android 대상 (2026-10-02)
+
+`-Target android-arm64`가 Android용 패키지를 세운다. 발행하는 갈래는 Windows와 같은
+rust png다. 이 장의 실측은 WSL2 Ubuntu 24.04, NDK r27d, Skia 152(`0873ec164a`)의
+것이고, 결과물이 arm64 실기기에서 돈다 (8.6).
+
+### 8.1 왜 Linux에서 세우는가
+
+rust png 코덱은 Bazel로 서는데, Skia의 Bazel NDK 도구사슬
+(`toolchain/BUILD.bazel`의 `linux_amd64_ndk_arm64_toolchain`)은 실행 환경이
+`linux x86_64`로 묶여 있다. 그래서 이 대상은 **Windows에서 세울 수 없다.** WSL2면
+된다. 스크립트는 같은 PowerShell 스크립트를 Linux의 `pwsh`로 돌린다 —
+`build_skia.ps1`이 호스트를 보고 맞지 않으면 시작 전에 멈춘다.
+
+Skia 본체(GN 쪽)는 Windows 호스트의 NDK로도 선다 (`gn/BUILDCONFIG.gn`이
+`host_os == "win"`을 안다). 막히는 것은 rust 쪽 하나다.
+
+### 8.2 준비 (WSL)
+
+소스와 Bazel 캐시는 **Linux 파일 시스템(`~/`)에 둔다.** `/mnt/e`를 거치면 Bazel이
+느리고 symlink가 어긋난다. Bazel 캐시는 이 대상에서도 14 GB까지 자란다.
+
+| 항목 | 비고 |
+| --- | --- |
+| `unzip`·`zip`·`build-essential` | apt. Bazel의 bootstrap이 쓴다 |
+| `pwsh` | 7 이상. Microsoft의 apt 저장소에서 받는다 |
+| `bazelisk` | `bazelisk-linux-amd64`를 `~/bin/bazelisk`로. 스크립트가 그 자리를 직접 본다 |
+| NDK r27d | `android-ndk-r27d-linux.zip`을 `~/ndk`에 푼다. Skia CI가 쓰는 판번이다 |
+| `gn`·`ninja` | Skia의 `bin/fetch-gn`·`bin/fetch-ninja`가 Linux판을 받는다. ninja는 Skia가 고정한 1.12.1이다 |
+
+NDK를 찾는 순서는 `-NdkPath`, `ANDROID_NDK_HOME`, `ANDROID_NDK_ROOT`,
+`third_party/skia-tools/ndk`, `~/ndk/android-ndk-r27d`다. r27이 아니면 경고만 한다.
+
+submodule은 Windows의 셋(D3D12MA·SPIRV 둘) 대신 아래를 받는다. 셋은 DEPS의
+commit에 고정한 GitHub 원본이다.
+
+```bash
+git submodule update --init third_party/skia
+git submodule update --init third_party/skia-externals/vulkanmemoryallocator
+git submodule update --init third_party/skia-externals/freetype
+git submodule update --init third_party/skia-externals/expat
+git submodule update --init third_party/skia-externals/libjpeg-turbo
+git submodule update --init third_party/skia-externals/libwebp
+git submodule update --init third_party/skia-externals/wuffs
+git submodule update --init third_party/skia-externals/libpng
+git submodule update --init third_party/skia-externals/zlib
+```
+
+`libpng`·`zlib`은 **rust 갈래여도 필요하다.** freetype이 컬러 이모지 때문에 libpng을,
+libpng이 zlib을 끌어온다 (`third_party/freetype2/BUILD.gn`). 코덱이 아니라 freetype의
+의존으로서 들어간다.
+
+### 8.3 빌드·검증·패키징
+
+```bash
+pwsh scripts/build_skia.ps1 -Target android-arm64 -Configuration Release -RustPng
+pwsh scripts/build_skia.ps1 -Target android-arm64 -Configuration Debug   -RustPng
+pwsh scripts/verify_skia_root.ps1 -Target android-arm64
+pwsh scripts/pack_skia.ps1 -Target android-arm64 -Configuration Release -Archive
+pwsh scripts/pack_skia.ps1 -Target android-arm64 -Configuration Debug -Destination build/skia-package-debug -Archive
+```
+
+산출 자리는 `out/skia-ui-android-arm64-{구성}`이다. 패키지 안에서는 Windows와 같은
+`out/skia-ui-{구성}`으로 놓인다 — 소비자가 읽는 경로가 그것이다.
+
+깨끗한 상태 — 패치가 걸리지 않은 Skia 트리, 빈 산출 디렉터리, external을 걷어 내고
+submodule로 다시 받은 저장소 — 에서 이 다섯 줄이 패치를 걸고, external을 symlink로
+놓고, 두 구성을 세우고, 검증하고, 압축하는 데 88초였다 (32코어, Bazel 캐시가 데워진
+상태). Bazel 캐시가 비어 있으면 첫 빌드가 도구사슬과 crate를 받느라 몇 분 더 든다.
+
+| 자산 | 압축 | 푼 뒤 |
+| --- | --- | --- |
+| `...-r1-android-arm64-release.zip` | 16.3 MB | 54 MB |
+| `...-r1-android-arm64-debug.zip` | 48.1 MB | 225 MB |
+
+rust 아카이브(`librust_png_ffi_rs.a`)가 크기의 대부분이다. 빌드 자리에서는 Release
+196 MB인데 대부분이 디버그 정보라, 걷어 내고 실으면 줄어든다 (8.7).
+
+`verify_skia_root.ps1`이 Android에서 따로 보는 것은 **아카이브의 CPU**다. ar member를
+하나씩 걸어 ELF의 `e_machine`을 센다. `libskia.a`는 GN이 NDK로 세우므로 언제나
+맞고, 어긋날 수 있는 것은 rust 아카이브다 — 8.4의 플랫폼 패치가 빠지면 그것만
+조용히 x86_64로 서고, 소비자의 링크에서야 드러난다.
+
+### 8.4 Windows와 다른 것
+
+**args**는 `skia-ui-android-arm64-{release,debug}.gn`이다. 계약은 같다
+(`is_trivial_abi = false`, partition_alloc 끔, 코덱 구성). 다른 것은 아래다.
+
+| | Windows | Android |
+| --- | --- | --- |
+| GPU | Direct3D | Vulkan (Ganesh) |
+| 글꼴 | DirectWrite | freetype + expat (`SkFontMgr_android`가 `/system/etc/fonts.xml`을 읽는다) |
+| 컴파일러 | clang-cl, `clang_win` | NDK r27d의 clang, `ndk` |
+| 하한 | — | `ndk_api = 26` (Android 8.0). 소비자의 minSdkVersion 하한이다 |
+
+`skia_use_perfetto`·`skia_use_ndk_images`는 기본값이 `is_android`라 저절로 켜지므로
+끈다. 뒤엣것은 `ndk_api >= 30`에서 png·jpeg 디코드를 플랫폼 코덱으로 바꾼다.
+
+**패치**도 대상마다 다른 둘이다. 서로 섞지 않는다.
+
+```bash
+git -C third_party/skia apply ../patches/skia-152-bazel-rust-android-triples.patch
+git -C third_party/skia apply ../patches/skia-152-bazel-rust-android-platform.patch
+```
+
+- `android-triples` — `MODULE.bazel`의 두 목록(Rust 표준 라이브러리의 대상, crate의
+  지원 플랫폼)에 `aarch64-linux-android`가 없다. 뒤엣것이 없으면 crate_universe가
+  `cxx`부터 모든 crate를 incompatible로 표시해 분석에서 멈춘다.
+- `android-platform` — GN이 Bazel에 `--platforms`를 mac에만 넘긴다. Android도
+  넘기게 한다. arm64만 다룬다.
+
+**crate 판번이 Windows와 다르다.** crate 확장의 입력이 바뀌면 lock에 적힌 결과가
+무효가 되고, Bazel이 고정되지 않은 전이 crate를 그날의 crates.io로 다시 푼다
+(2026-10-02: crate 저장소 158 → 161, `cc` 1.4.4 → 1.5.1 등). 그래서
+`android-triples` 패치가 **`MODULE.bazel.lock`째** 담는다 — 다시 세워도 같은
+crate가 선다. lock에서 달라진 것은 crate 확장의 항목 하나뿐이다. crate 고지 사본도
+대상마다 따로다 (`third_party/rust-licenses/<대상>`).
+
+**두 NDK가 섞인다.** rust 쪽 C++ 브리지(`cxx`)는 Bazel이 받는 NDK **r21e**로,
+나머지는 r27d로 컴파일된다. 링크와 실행 모두 문제없었다 (8.6). `toolchain.json`이
+둘을 함께 적는다 (`ndk_revision`, `rust_bridge_ndk_revision`).
+
+### 8.5 소비자가 지킬 것
+
+1. **`-Wl,--allow-multiple-definition`으로 링크한다.** Bazel의 `rust_static_library`가
+   의존하는 Skia C++ 오브젝트까지 아카이브에 담는다 (실측 441개). 같은 심볼이
+   `libskia.a`와 겹치고, lld는 그것을 오류로 본다. Skia의 `BUILD.gn`도
+   `rust_ffi_libs_config`에서 같은 플래그를 요구한다. 먼저 찾은 정의가 쓰이므로
+   **`libskia.a`를 앞에 둔다.** (Windows의 `link.exe`는 같은 겹침을 조용히 넘긴다.
+   그래서 Windows 패키지에서는 드러나지 않았다.)
+2. **`-landroid -llog`를 링크한다.** 앞엣것은 `AHardwareBuffer`(Vulkan), 뒤엣것은
+   Skia의 로그다. 빼면 링크가 깨진다. 그 밖에 요구하는 시스템 라이브러리는
+   `libm`·`libdl`·`libc`뿐이다.
+3. **Vulkan 메모리 할당기를 직접 넘긴다.** M152의 `GrVkGpu`는 그것을 스스로 만들지
+   않는다. 만드는 함수 `skgpu::VulkanMemoryAllocators::Make`는 내부 헤더
+   (`src/gpu/vk/vulkanmemoryallocator/VulkanMemoryAllocatorPriv.h`)에만 선언돼 있어
+   패키지에 없다. 심볼은 `libskia.a`에 있으므로 선언을 소비자가 들고 있는다
+   (`tools/android_probe.cpp`가 그렇게 한다).
+4. **Vulkan 헤더는 NDK의 것으로 충분하다.** Skia 자신은 내부 헤더(VK_HEADER_VERSION
+   347)로 섰지만, 그것을 여는 `SK_USE_INTERNAL_VULKAN_HEADERS`는 Skia의 컴파일에만
+   붙는다. 소비자는 NDK r27d의 헤더(275)로 경고 없이 선다. 패키지는
+   `include/third_party/`를 싣지 않는다.
+5. **FreeType을 제품 문서에 밝힌다.** freetype은 FTL과 GPLv2 중 하나를 고르는
+   이중 라이선스이고 이 패키지는 FTL을 고른다. FTL의 그 조항이 앱을 내는 쪽으로
+   넘어간다. 권하는 문구는 `NOTICE.md` 머리에 있다.
+
+### 8.6 기기에서 확인한다
+
+링크가 서는 것은 심볼이 맞는다는 것까지다. `tools/android_probe.cpp`가 기기 위에서
+소비자의 길 넷을 밟는다 — CPU 래스터, rust png 왕복, 시스템 글꼴, 화면 없는
+Vulkan. 세우는 명령은 그 파일 머리에 있다. 앱(APK)도 화면도 필요 없다.
+
+```powershell
+adb push android_probe_release /data/local/tmp/
+adb shell "chmod 755 /data/local/tmp/android_probe_release && /data/local/tmp/android_probe_release"
+```
+
+arm64 실기기(Vulkan 지원)에서 Release·Debug 모두 넷을 통과했다. 어느 기기인지는
+적지 않는다.
+
+```text
+[OK  ] raster  64x64 blue with a red square
+[OK  ] png     206 bytes, round trip is pixel-exact
+[OK  ] fonts   <N> families, "Ag" inked <N> px
+[OK  ] vulkan  <GPU 이름>: Ganesh drew and read back
+android_probe passed
+```
+
+빌드 자리의 아카이브로 한 번, **패키지에 실린 아카이브**(디버그 정보를 걷은 것)로 한
+번 링크해 둘 다 돌렸다. Debug는 `SkASSERT`가 켜진 구성이라 하나라도 걸리면 거기서
+멈춘다. 기기 로그(`logcat`)에도 Skia의 경고가 없었다.
+
+`adb`는 Windows 쪽에서 쓴다 (`winget install Google.PlatformTools`). WSL에서 USB를
+보려면 usbipd가 더 든다. 시험 파일은 `\\wsl.localhost\<배포판>\...`로 바로 올린다.
+
+
+### 8.7 생산자의 경로를 싣지 않는다
+
+공개 자산이다. 처음 세운 Android 패키지에는 생산자의 홈 디렉터리
+(`/home/<사용자>`)가 세 갈래로 실려 있었다. Windows 패키지에는 없던 일이다
+(Release·Debug 모두 대조했다).
+
+| 자리 | 무엇이 | 막는 법 |
+| --- | --- | --- |
+| `args.gn` | `ndk = "<NDK 경로>"` | `pack_skia.ps1`이 그 경로를 이름으로 바꿔 싣는다 |
+| GN이 세운 Debug 아카이브 | DWARF의 컴파일 디렉터리, external 소스, NDK 시스템 헤더 | `build_skia.ps1`이 `-ffile-prefix-map`을 덧붙인다 (저장소 → `skia-prep`, NDK → `android-ndk`) |
+| Bazel이 세운 rust 아카이브 둘 | DWARF의 컴파일 디렉터리 (Bazel sandbox, `_bazel_<사용자>`) — 449개 오브젝트 | `pack_skia.ps1`이 `llvm-objcopy --strip-debug`로 디버그 정보를 걷는다. 심볼은 남는다 |
+
+rust 쪽을 빌드 때 고치지 않는 것은, Bazel의 C++과 rustc 양쪽에 경로 대응을 넣어야
+하고 그것이 Skia 트리를 더 고치는 일이기 때문이다. 걷어 내는 쪽이 결정적이고
+대상 하나에 갇힌다. 잃는 것은 rust 코덱과 그 아카이브에 함께 담긴 Skia 오브젝트의
+디버그 정보다 — 앞엣것은 링크에서 `libskia.a`가 이기므로 원래 쓰이지 않는다.
+
+마지막 그물은 `pack_skia.ps1`의 검사다. 압축하기 전에 패키지의 모든 파일에서
+이 기계의 경로(`$HOME`·`_bazel_$USER`, Windows에서는 `%USERPROFILE%`)를 바이트로
+찾고, 하나라도 있으면 **압축하지 않고 멈춘다.** 위의 표가 그 검사에 걸려 찾은
+것이다.
