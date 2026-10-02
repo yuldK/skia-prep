@@ -113,8 +113,11 @@ $rust_png_components = @('librust_png_ffi_rs.a', 'libcxx_cc.a')
 #
 # **대상마다 따로 센다.** 같은 물건의 재빌드를 가르는 번호이고, 두 대상은 서로
 # 무관한 이유로 다시 선다. android-arm64의 r1은 첫 Android 패키지다.
+#
+#   win-x64 r3  prefix map을 더해 Debug 디버그 정보에서 생산자 경로를 걷었다.
+#               r2 Debug 자산에는 사용자 이름이 실려 있다 (docs/skia-build.md 8.7).
 $package_revisions = @{
-    'win-x64'       = 2
+    'win-x64'       = 3
     'android-arm64' = 1
 }
 $package_revision = $package_revisions[$Target]
@@ -338,6 +341,120 @@ The static archive links the Rust standard library, so its notice is required.
     return "licenses/rust/$name"
 }
 
+# Bazel 아카이브의 디버그 정보를 걷는다 (아래 4단계의 주석).
+#
+# Android(ELF)는 llvm-objcopy가 아카이브를 통째로 받는다. Windows는 그러지 못한다 —
+# Rust 표준 라이브러리가 넣는 짧은 import 오브젝트(bcryptprimitives.dll 등 넷)를
+# llvm-objcopy가 읽지 못해 "unsupported object file format"으로 멈춘다. 그래서
+# 멤버로 갈라 COFF 오브젝트만 걷고, 나머지는 그대로 두고, 원래 순서로 다시 묶는다.
+# 심볼 표는 llvm-ar가 새로 쓴다.
+#
+# **멤버 이름을 지킨다.** 처음에는 겹치는 이름(같은 DLL의 import 오브젝트가 여러
+# 번 든다)을 피하려고 번호를 붙여 묶었는데, 그 아카이브에 MSVC로 링크한 실행
+# 파일이 시작하자마자 access violation으로 죽었다. 걷지 않고 다시 묶기만 해도 같았고,
+# 이름(경로를 뗀 것)을 그대로 두고 묶으면 걷은 것까지 돈다 (2026-10-02,
+# bench_skia.ps1로 링크하고 실행해 확인). 어느 멤버의 이름이 문제인지는 가르지
+# 않았다. 그래서 멤버마다 번호 디렉터리를 두고 그 안에 원래 이름으로 떨어뜨린다.
+function Invoke-ArchiveStrip {
+    param([string]$source, [string]$destination, [string]$objcopy)
+
+    if ($is_android) {
+        & $objcopy --strip-debug $source $destination
+        if ($LASTEXITCODE -ne 0) {
+            throw "llvm-objcopy --strip-debug failed on: $source"
+        }
+        return
+    }
+
+    if (-not ('SkiaArchiveMembers' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+
+public static class SkiaArchiveMembers {
+    // GNU·COFF ar의 멤버를 순서대로 파일로 떨어뜨린다. 심볼 표("/", "/SYM64/")와
+    // 긴 이름 표("//")는 뺀다. 멤버마다 "번호/원래이름"에 두어 이름이 겹쳐도 된다.
+    public static string[] Extract(string path, string directory) {
+        byte[] data = File.ReadAllBytes(path);
+        if (Encoding.ASCII.GetString(data, 0, 8) != "!<arch>\n") {
+            throw new InvalidDataException("not an ar archive: " + path);
+        }
+        List<string> files = new List<string>();
+        byte[] names = new byte[0];
+        long offset = 8;
+        int index = 0;
+        while (offset + 60 <= data.Length) {
+            string name = Encoding.ASCII.GetString(data, (int)offset, 16).TrimEnd(' ');
+            long size = long.Parse(Encoding.ASCII.GetString(data, (int)offset + 48, 10).Trim());
+            long body = offset + 60;
+            if (name == "//") {
+                names = new byte[size];
+                Array.Copy(data, body, names, 0, size);
+            } else if (name != "/" && name != "/SYM64/") {
+                if (name.StartsWith("/") && name.Length > 1 && char.IsDigit(name[1])) {
+                    int start = int.Parse(name.Substring(1));
+                    int end = start;
+                    while (end < names.Length && names[end] != 0 && names[end] != (byte)'\n') { end++; }
+                    name = Encoding.ASCII.GetString(names, start, end - start);
+                }
+                name = name.TrimEnd('/');
+                string leaf = Path.GetFileName(name.Replace('\\', '/'));
+                foreach (char c in Path.GetInvalidFileNameChars()) { leaf = leaf.Replace(c, '_'); }
+                string slot = Path.Combine(directory, string.Format("{0:D5}", index++));
+                Directory.CreateDirectory(slot);
+                string file = Path.Combine(slot, leaf);
+                byte[] member = new byte[size];
+                Array.Copy(data, body, member, 0, size);
+                File.WriteAllBytes(file, member);
+                files.Add(file);
+            }
+            offset = body + size + (size & 1);
+        }
+        return files.ToArray();
+    }
+
+    // x64 COFF 오브젝트인가. 짧은 import 오브젝트는 0000 ffff로 시작한다.
+    public static bool IsCoffObject(string file) {
+        using (FileStream stream = File.OpenRead(file)) {
+            int a = stream.ReadByte();
+            int b = stream.ReadByte();
+            return a == 0x64 && b == 0x86;
+        }
+    }
+}
+'@
+    }
+
+    $work = Join-Path ([System.IO.Path]::GetTempPath()) ('skia-prep-strip-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $work | Out-Null
+    try {
+        $members = [SkiaArchiveMembers]::Extract($source, $work)
+        foreach ($member in $members) {
+            if ([SkiaArchiveMembers]::IsCoffObject($member)) {
+                & $objcopy --strip-debug $member
+                if ($LASTEXITCODE -ne 0) {
+                    throw "llvm-objcopy --strip-debug failed on a member of $source : $member"
+                }
+            }
+        }
+        $ar = Join-Path (Split-Path -Parent $objcopy) 'llvm-ar.exe'
+        $response = Join-Path $work 'members.rsp'
+        [System.IO.File]::WriteAllLines($response, @($members | ForEach-Object { '"{0}"' -f ($_ -replace '\\', '/') }))
+        if (Test-Path -LiteralPath $destination) {
+            Remove-Item -LiteralPath $destination -Force
+        }
+        & $ar rcs --format=coff $destination "@$response"
+        if ($LASTEXITCODE -ne 0) {
+            throw "llvm-ar failed to rebuild: $destination"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ---------------------------------------------------------------------------
 # 1. 구성별 산출물을 확인하고 png 갈래를 정한다.
 # ---------------------------------------------------------------------------
@@ -458,24 +575,25 @@ foreach ($build in $builds) {
     $package_build_directory = Join-Path $package_root ('out\skia-ui-{0}' -f $build.name.ToLowerInvariant())
     New-Item -ItemType Directory -Force -Path $package_build_directory | Out-Null
     $published_arguments = Join-Path $package_build_directory 'args.gn'
+    # build_skia.ps1이 args에 덧붙인 것 중 **생산자 기계의 경로**가 있다 — Android의
+    # ndk, 그리고 두 대상의 -ffile-prefix-map 앞쪽(저장소·Skia 트리). 그 경로 자체를
+    # 이름으로 바꿔 싣는다. 줄을 지우지 않는 것은 gn이 긴 값을 여러 줄로 접어 쓰기
+    # 때문이고, 바꾼 뒤에도 무엇을 어디로 옮겼는지는 남는다. 긴 경로부터 바꾼다
+    # (Skia 트리가 저장소 안에 있다). GN 문자열 안에서는 슬래시로 적혀 있다.
+    # clang_win(Program Files 아래)은 사용자 이름이 없어 그대로 둔다.
+    $arguments_text = Get-Content -Raw -LiteralPath $build.arguments
+    $machine_paths = [ordered]@{}
     if ($is_android) {
-        # build_skia.ps1이 args에 덧붙인 것 중 둘이 **생산자 기계의 경로**다 — ndk와
-        # -ffile-prefix-map의 앞쪽. 그 경로 자체를 이름으로 바꿔 싣는다. 줄을 지우지
-        # 않는 것은 gn이 긴 값을 여러 줄로 접어 쓰기 때문이고, 바꾼 뒤에도 무엇을
-        # 어디로 옮겼는지는 남는다. 긴 경로부터 바꾼다 (Skia 트리가 저장소 안에 있다).
-        $arguments_text = Get-Content -Raw -LiteralPath $build.arguments
-        $machine_paths = [ordered]@{}
         $machine_paths["$($toolchain_record.ndk)"] = "<android-ndk r$($toolchain_record.ndk_revision)>"
-        $machine_paths[$skia_root] = '<skia>'
-        $machine_paths[$repository_root] = '<skia-prep>'
-        foreach ($path in ($machine_paths.Keys | Where-Object { $_ } | Sort-Object Length -Descending)) {
-            $arguments_text = $arguments_text.Replace($path, $machine_paths[$path])
-        }
-        [System.IO.File]::WriteAllText($published_arguments, $arguments_text)
     }
-    else {
-        Copy-Item -LiteralPath $build.arguments -Destination $package_build_directory -Force
+    foreach ($pair in @(@($skia_root, '<skia>'), @($repository_root, '<skia-prep>'))) {
+        $machine_paths[$pair[0]] = $pair[1]
+        $machine_paths[($pair[0] -replace '\\', '/')] = $pair[1]
     }
+    foreach ($path in ($machine_paths.Keys | Where-Object { $_ } | Sort-Object Length -Descending)) {
+        $arguments_text = $arguments_text.Replace($path, $machine_paths[$path])
+    }
+    [System.IO.File]::WriteAllText($published_arguments, $arguments_text)
     # args.gn 옆에 toolchain.json도 싣는다. 소비자가 configure 시점에 읽는 구성
     # 계약이 args.gn 하나였는데, 그것은 무엇으로 컴파일했는지를 적지 못한다.
     #
@@ -493,18 +611,28 @@ foreach ($build in $builds) {
     Set-Content -LiteralPath (Join-Path $package_build_directory 'toolchain.json') `
         -Value ($published | ConvertTo-Json -Depth 4) -Encoding UTF8
 
-    # Bazel이 세운 아카이브(rust 갈래의 둘)는 Android에서 **디버그 정보를 걷어
-    # 싣는다.** 그 C++ 오브젝트의 DWARF 컴파일 디렉터리가 Bazel sandbox의 절대
-    # 경로(~/.cache/bazel/_bazel_<사용자>/...)라 사용자 이름이 449개 오브젝트에
-    # 박힌다 (2026-10-02 실측. GN이 세운 libskia.a에는 없다). 심볼은 그대로라
-    # 링크에는 영향이 없다. 크기와 해시는 실린 파일의 것을 적는다.
+    # Bazel이 세운 아카이브(rust 갈래의 둘)는 **디버그 정보를 걷어 싣는다.** 그
+    # 오브젝트의 디버그 정보가 Bazel 출력 자리의 절대 경로(_bazel_<사용자>)를 적어
+    # 사용자 이름이 박힌다 — Android Release에서 449개 오브젝트, Windows Debug에서도
+    # (Bazel이 c:\users\<사용자>로 소문자로 적는다). 2026-10-02 실측. GN이 세운
+    # 아카이브는 build_skia.ps1의 prefix map이 막는다. Bazel 쪽은 그 인자를 넘길
+    # 자리가 없어 여기서 걷는다. 심볼은 그대로라 링크에는 영향이 없다. 크기와
+    # 해시는 실린 파일의 것을 적는다.
     $strip_components = @()
     $objcopy = ''
-    if ($is_android -and $png_codec -eq 'rust') {
+    if ($png_codec -eq 'rust') {
         $strip_components = $rust_png_components
-        $objcopy = Join-Path "$($toolchain_record.ndk)" 'toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy'
-        if (-not (Test-Path -LiteralPath $objcopy -PathType Leaf)) {
-            throw "llvm-objcopy was not found in the NDK that built this package: $objcopy"
+        $objcopy = if ($is_android) {
+            Join-Path "$($toolchain_record.ndk)" 'toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy'
+        }
+        elseif ("$($toolchain_record.clang_win)") {
+            Join-Path "$($toolchain_record.clang_win)" 'bin\llvm-objcopy.exe'
+        }
+        else {
+            ''
+        }
+        if (-not $objcopy -or -not (Test-Path -LiteralPath $objcopy -PathType Leaf)) {
+            throw "llvm-objcopy was not found next to the compiler that built this package: $objcopy"
         }
     }
     $files = [ordered]@{}
@@ -512,10 +640,7 @@ foreach ($build in $builds) {
         $source = Join-Path $build.directory $component
         $published_file = Join-Path $package_build_directory $component
         if ($component -in $strip_components) {
-            & $objcopy --strip-debug $source $published_file
-            if ($LASTEXITCODE -ne 0) {
-                throw "llvm-objcopy --strip-debug failed on: $source"
-            }
+            Invoke-ArchiveStrip -source $source -destination $published_file -objcopy $objcopy
         }
         else {
             Copy-Item -LiteralPath $source -Destination $package_build_directory -Force
@@ -688,18 +813,25 @@ Set-Content -LiteralPath (Join-Path $package_root 'VERSION.json') `
 # 7. 생산자 기계의 경로가 실리지 않았는지 본다.
 # ---------------------------------------------------------------------------
 # 공개 자산이다. 사용자 이름이 든 경로가 하나라도 남으면 압축하지 않고 멈춘다.
-# toolchain.json·args.gn·rust 아카이브에서 걷어 낸 것이 다른 자리로 새지 않았는지를
-# 마지막에 한 번에 확인하는 자리다. 바이트를 그대로 찾는다 (대소문자 구별).
+# toolchain.json·args.gn·아카이브에서 걷어 낸 것이 다른 자리로 새지 않았는지를
+# 마지막에 한 번에 확인하는 자리다.
+#
+# 찾는 것은 홈 디렉터리, Bazel의 출력 자리 이름(_bazel_<사용자>), 그리고 저장소와
+# Skia 트리의 경로다 — 저장소가 사용자 이름의 폴더 아래에 있으면 홈이 아니어도
+# 이름이 실린다. 구분자는 양쪽을 다 보고, **대소문자는 가리지 않는다.** Windows의
+# 경로는 대소문자를 가리지 않고, Bazel은 그것을 소문자로 적는다 — 처음의 검사가
+# 대소문자를 가려 Windows Debug의 c:\users\<사용자>를 놓쳤다 (2026-10-02).
 $producer_markers = [System.Collections.Generic.List[string]]::new()
-if ($env:OS -eq 'Windows_NT') {
-    if ($env:USERPROFILE) {
-        $producer_markers.Add($env:USERPROFILE)
-        $producer_markers.Add(($env:USERPROFILE -replace '\\', '/'))
-    }
+$user_name = if ($env:OS -eq 'Windows_NT') { $env:USERNAME } else { $env:USER }
+$marker_paths = @($repository_root, $skia_root)
+$marker_paths += if ($env:OS -eq 'Windows_NT') { $env:USERPROFILE } else { $HOME }
+foreach ($path in ($marker_paths | Where-Object { $_ })) {
+    $producer_markers.Add($path)
+    $producer_markers.Add(($path -replace '\\', '/'))
+    $producer_markers.Add(($path -replace '/', '\'))
 }
-else {
-    if ($HOME) { $producer_markers.Add($HOME) }
-    if ($env:USER) { $producer_markers.Add("_bazel_$($env:USER)") }
+if ($user_name) {
+    $producer_markers.Add("_bazel_$user_name")
 }
 $leaks = [System.Collections.Generic.List[string]]::new()
 if ($producer_markers.Count -gt 0) {
@@ -708,6 +840,9 @@ using System;
 using System.IO;
 
 public static class SkiaPackageScan {
+    static byte Lower(byte b) { return (b >= (byte)'A' && b <= (byte)'Z') ? (byte)(b + 32) : b; }
+
+    // pattern은 소문자로 넘긴다. ASCII 영문자만 대소문자를 가리지 않고 맞춘다.
     public static bool Contains(string path, byte[] pattern) {
         using (FileStream file = File.OpenRead(path)) {
             byte[] buffer = new byte[1 << 20];
@@ -717,9 +852,9 @@ public static class SkiaPackageScan {
             while ((read = file.Read(buffer, offset, buffer.Length - offset)) > 0) {
                 int total = offset + read;
                 for (int i = 0; i + pattern.Length <= total; i++) {
-                    if (buffer[i] != pattern[0]) { continue; }
+                    if (Lower(buffer[i]) != pattern[0]) { continue; }
                     int j = 1;
-                    while (j < pattern.Length && buffer[i + j] == pattern[j]) { j++; }
+                    while (j < pattern.Length && Lower(buffer[i + j]) == pattern[j]) { j++; }
                     if (j == pattern.Length) { return true; }
                 }
                 if (total >= carry) {
@@ -734,7 +869,7 @@ public static class SkiaPackageScan {
     }
 }
 '@
-    $patterns = @($producer_markers | Select-Object -Unique |
+    $patterns = @($producer_markers | ForEach-Object { $_.ToLowerInvariant() } | Select-Object -Unique |
             ForEach-Object { , [System.Text.Encoding]::UTF8.GetBytes($_) })
     foreach ($file in Get-ChildItem -LiteralPath $package_root -Recurse -File) {
         foreach ($pattern in $patterns) {
@@ -752,7 +887,8 @@ The package carries a path from this machine ($($producer_markers -join ', ')):
 It would publish the producer's user name. Find where it comes from before packaging.
 "@
 }
-Write-Output ('producer paths : none ({0} markers checked)' -f $producer_markers.Count)
+Write-Output ('producer paths : none ({0} markers checked, case-insensitive)' -f
+    @($producer_markers | ForEach-Object { $_.ToLowerInvariant() } | Select-Object -Unique).Count)
 
 # ---------------------------------------------------------------------------
 # 8. 압축 (선택).

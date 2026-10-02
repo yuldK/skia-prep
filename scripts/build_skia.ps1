@@ -719,32 +719,60 @@ if ($is_android) {
     $ndk_clang = Join-Path $ndk 'toolchains/llvm/prebuilt/linux-x86_64/bin/clang'
     $compiler_version = (& $ndk_clang --version | Select-Object -First 1).Trim()
     $argument_text += "`nndk = `"{0}`"`n" -f $ndk
-
-    # 이 기계의 절대 경로를 오브젝트에 박지 않는다. Debug의 DWARF가 산출 디렉터리,
-    # external 소스, NDK 시스템 헤더를 절대 경로로 적어 생산자의 사용자 이름이 공개
-    # 자산에 실렸다 (2026-10-02 실측, 13개 아카이브). -ffile-prefix-map이 디버그
-    # 정보와 __FILE__ 양쪽에서 그 앞부분을 이름 하나로 바꾼다. 경로가 이 기계의
-    # 것이므로 args 파일이 아니라 여기서 덧붙이고, pack_skia.ps1이 발행할 때
-    # args.gn에서 그 경로를 다시 가린다. 겹치지 않는 자리만 넣는다 — Skia 트리가
-    # 저장소 안에 있으면 저장소 하나로 덮인다.
-    $prefix_maps = [ordered]@{}
-    $prefix_maps[$repository_root] = 'skia-prep'
-    if (-not $skia_root.StartsWith($repository_root + '/')) {
-        $prefix_maps[$skia_root] = 'skia'
-    }
-    $prefix_maps[$ndk] = 'android-ndk'
-    $prefix_flags = ($prefix_maps.Keys | ForEach-Object {
-            '"-ffile-prefix-map={0}={1}"' -f $_, $prefix_maps[$_]
-        }) -join ', '
-    foreach ($name in @('extra_cflags_c', 'extra_cflags_cc', 'extra_asmflags')) {
-        $argument_text += "{0} = [ {1} ]`n" -f $name, $prefix_flags
-    }
 }
 elseif ($Toolchain -eq 'clang') {
     $clang_win = Resolve-ClangWin
     $compiler_version = (& (Join-Path $clang_win 'bin\clang-cl.exe') --version |
         Select-Object -First 1).Trim()
     $argument_text += "`nclang_win = `"{0}`"`n" -f ($clang_win -replace '\\', '/')
+}
+
+# 이 기계의 절대 경로를 오브젝트에 박지 않는다. 생산자의 사용자 이름이 공개 자산에
+# 실리기 때문이다 (2026-10-02 실측, docs/skia-build.md 8.7).
+#   Android : Debug의 DWARF가 산출 디렉터리·external 소스·NDK 시스템 헤더를 적었다.
+#   Windows : Debug의 /Z7 CodeView가 저장소 경로를 적었다 (저장소가 사용자 이름의
+#             폴더 아래에 있다). 발행한 r2 Debug 자산에도 실려 있다.
+# -ffile-prefix-map이 디버그 정보와 __FILE__ 양쪽에서 그 앞부분을 이름 하나로 바꾼다.
+# 경로가 이 기계의 것이므로 args 파일이 아니라 여기서 덧붙이고, pack_skia.ps1이 발행할
+# 때 args.gn에서 그 경로를 다시 가린다. 겹치지 않는 자리만 넣는다 — Skia 트리가
+# 저장소 안에 있으면 저장소 하나로 덮인다.
+#
+# clang-cl에는 둘이 더 든다 (2026-10-02, clang 19.1.5로 실측).
+#   -fdebug-compilation-dir=.    : S_OBJNAME이 오브젝트의 절대 경로를 적는데 prefix
+#                                  map이 그것을 바꾸지 않는다 (드라이브 문자의 대소문자도
+#                                  바뀌어 나온다).
+#   -gno-codeview-command-line   : LF_BUILDINFO가 컴파일 명령줄을 통째로 적는다 —
+#                                  prefix map 인자 자체에 원래 경로가 들어 있다.
+# 경로는 슬래시로 넘긴다. GN 문자열에서 역슬래시는 이스케이프이고, clang은 Windows에서
+# 구분자와 대소문자를 가리지 않고 앞부분을 맞춘다 (역슬래시 경로에 대고 실측했다).
+# -Toolchain msvc(cl.exe)는 /clang: 인자를 모르므로 붙이지 않는다 — 발행하지 않는
+# 비교용 갈래다.
+$prefix_maps = [ordered]@{}
+$prefix_maps[($repository_root -replace '\\', '/')] = 'skia-prep'
+$skia_root_slash = $skia_root -replace '\\', '/'
+if (-not $skia_root_slash.StartsWith(($repository_root -replace '\\', '/') + '/')) {
+    $prefix_maps[$skia_root_slash] = 'skia'
+}
+if ($is_android) {
+    $prefix_maps[$ndk] = 'android-ndk'
+    $prefix_flags = @($prefix_maps.Keys | ForEach-Object { '-ffile-prefix-map={0}={1}' -f $_, $prefix_maps[$_] })
+    $flag_names = @('extra_cflags_c', 'extra_cflags_cc', 'extra_asmflags')
+}
+elseif ($Toolchain -eq 'clang') {
+    $prefix_flags = @($prefix_maps.Keys | ForEach-Object { '/clang:-ffile-prefix-map={0}={1}' -f $_, $prefix_maps[$_] }) +
+        @('/clang:-fdebug-compilation-dir=.', '/clang:-gno-codeview-command-line')
+    # 어셈블리는 ml64가 받으므로 /clang: 인자를 넘기지 않는다.
+    $flag_names = @('extra_cflags_c', 'extra_cflags_cc')
+}
+else {
+    $prefix_flags = @()
+    $flag_names = @()
+}
+if ($prefix_flags) {
+    $flag_list = ($prefix_flags | ForEach-Object { '"{0}"' -f $_ }) -join ', '
+    foreach ($name in $flag_names) {
+        $argument_text += "{0} = [ {1} ]`n" -f $name, $flag_list
+    }
 }
 
 Write-Output "Skia root      : $skia_root"
