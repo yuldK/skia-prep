@@ -762,7 +762,16 @@ strip하면 두 패키지가 바이트 수까지 같다 (12,879,448). Android의
 갈래에는 expat 표지가 보이는데, Android에서 글꼴 관리자(`SkFontMgr_android`)가
 `fonts.xml`을 expat으로 읽기 때문이다 — core의 몫이다.
 
-패키지 zip은 판번 표에 있다 (publishing.md 4장).
+패키지 zip은 판번 표에 있다 (publishing.md 4장). 기능마다 그 아카이브만 따로 압축한
+크기는 아래다 (공유하는 skshaper·skresources는 각 기능에 넣어 셌다). 모듈 헤더와 그것이
+여는 내부 헤더, NOTICE.json을 합쳐 0.13 MB가 더 든다.
+
+| 기능 | win-x64 Release | win-x64 Debug | android-arm64 Release | android-arm64 Debug |
+| --- | ---: | ---: | ---: | ---: |
+| svg | 0.2 MB | 4.5 MB | 0.2 MB | 1.6 MB |
+| text | 3.0 MB | 27.1 MB | 2.8 MB | 9.9 MB |
+| skottie | 0.5 MB | 10.0 MB | 0.4 MB | 3.6 MB |
+| avif | 1.2 MB | 3.8 MB | 1.2 MB | 2.9 MB |
 
 ### 6.7 Release 심볼 자산 (win-x64)
 
