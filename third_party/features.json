@@ -70,6 +70,19 @@
                 "android-arm64": [ "harfbuzz", "icu" ]
             }
         },
+        "text_fallback": {
+            "description": "플랫폼 ICU가 없을 때(Android 11 이하, Windows 10 1703 이전) 쓰는 두 번째 SkUnicode 백엔드(libgrapheme + ICU bidi 일부, 데이터 파일 없음). SkShapers::BestAvailableUnicode()가 ICU를 먼저, 안 되면 이것을 고른다. 소비자 정의 SK_UNICODE_LIBGRAPHEME_IMPLEMENTATION을 더한다.",
+            "requires": [ "core", "text" ],
+            "libraries": {
+                "win-x64": [ "skunicode_libgrapheme.lib" ],
+                "android-arm64": [ "libskunicode_libgrapheme.a" ]
+            },
+            "system_libraries": { "win-x64": [], "android-arm64": [] },
+            "notices": {
+                "win-x64": [ "libgrapheme", "icu" ],
+                "android-arm64": [ "libgrapheme", "icu" ]
+            }
+        },
         "skottie": {
             "description": "Lottie 재생. 글자 레이어는 기본이 primitive shaper이고 text 기능의 공장을 넘기면 HarfBuzz로 모양 잡는다.",
             "requires": [ "core" ],

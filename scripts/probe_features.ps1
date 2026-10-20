@@ -60,6 +60,8 @@ $variants = [ordered]@{
     'skottie'      = @{ features = @('core', 'skottie'); defines = @('PROBE_SKOTTIE') }
     'svg_text'     = @{ features = @('core', 'svg', 'text'); defines = @('PROBE_SVG', 'PROBE_TEXT') }
     'skottie_text' = @{ features = @('core', 'skottie', 'text'); defines = @('PROBE_SKOTTIE', 'PROBE_TEXT') }
+    # ICU를 끄고(SKIA_PREP_ICU_DISABLE) libgrapheme 백엔드로 같은 텍스트 시험을 돌린다.
+    'text_fallback' = @{ features = @('core', 'text', 'text_fallback'); defines = @('PROBE_TEXT', 'PROBE_TEXT_FALLBACK') }
 }
 # 기존 GPU 백엔드다. Windows에서만 — Android의 Vulkan은 tools/android_probe.cpp가 기기에서 본다.
 if (-not $is_android) {
@@ -156,6 +158,9 @@ function Build-Variant {
     $defines = @($variant.defines)
     if ('PROBE_TEXT' -in $defines) {
         $defines += $text_defines
+    }
+    if ('PROBE_TEXT_FALLBACK' -in $defines) {
+        $defines += 'SK_UNICODE_LIBGRAPHEME_IMPLEMENTATION'
     }
     $executable = Join-Path $work ('feature_probe-{0}{1}' -f $label, $(if ($is_android) { '' } else { '.exe' }))
     $map = Join-Path $work ('feature_probe-{0}.map' -f $label)

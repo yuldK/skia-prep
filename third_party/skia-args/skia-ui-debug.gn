@@ -43,7 +43,11 @@ skia_use_icu = true
 skia_use_system_icu = false
 skia_use_runtime_icu = true
 skia_use_icu4x = false
-skia_use_libgrapheme = false
+# 플랫폼 ICU가 없을 때(Android 11 이하, Windows 10 1703 이전) 쓰는 두 번째 백엔드다.
+# skunicode_libgrapheme이 따로 된 아카이브로 나온다. 줄 나눔·글자소는 libgrapheme이,
+# bidi는 ICU 소스의 일부(icu_bidi)가 맡고, 데이터 파일은 없다. 소비자는
+# SkShapers::BestAvailableUnicode()로 "ICU 먼저, 안 되면 libgrapheme"을 고른다.
+skia_use_libgrapheme = true
 skia_use_client_icu = false
 # 기본값이 skia_use_harfbuzz다. PDF를 끄므로 지금은 뜻이 없지만, 켜 두면
 # PDF를 켜는 날 harfbuzz가 skia.lib 안으로 들어간다.

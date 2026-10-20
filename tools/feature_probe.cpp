@@ -10,6 +10,8 @@
 //   PROBE_SVG          SkSVGDOM -> SkPicture -> raster. path·gradient·<text>·viewBox 축소
 //   PROBE_TEXT         HarfBuzz + SkUnicode(시스템 ICU)로 아랍어·힌디어·ZWJ 이모지·옛한글을
 //                      모양 잡고 글리프와 클러스터를 센다. SkParagraph도 돌린다
+//   PROBE_TEXT_FALLBACK  (PROBE_TEXT와 함께) ICU를 끄고 BestAvailableUnicode()가 libgrapheme
+//                      백엔드로 물러선 뒤 같은 텍스트 시험을 돌린다
 //   PROBE_AVIF         AVIF 디코더를 등록해 정지·애니메이션 AVIF를 읽는다
 //   PROBE_SKOTTIE      Lottie JSON을 읽어 몇 프레임을 그린다
 //   PROBE_D3D          (Windows) Direct3D 12 장치를 만들어 Ganesh로 그리고 되읽는다.
@@ -505,8 +507,21 @@ Collect Shape(const sk_sp<SkFontMgr>& fonts, const char* utf8,
 }
 
 void ProbeText() {
+#if defined(PROBE_TEXT_FALLBACK)
+    // 플랫폼 ICU가 없는 기기를 흉내 낸다. 로더의 시험용 손잡이(skia-157-runtime-icu-system.patch)로
+    // ICU를 열지 않게 하고, 소비자가 쓸 길(BestAvailableUnicode)이 libgrapheme으로 물러서는지 본다.
+#if defined(_WIN32)
+    _putenv_s("SKIA_PREP_ICU_DISABLE", "1");
+#else
+    setenv("SKIA_PREP_ICU_DISABLE", "1", 1);
+#endif
+    Report("unicode", SkUnicodes::ICU::Make() == nullptr, "ICU disabled: SkUnicodes::ICU::Make returns null");
+    g_unicode = SkShapers::BestAvailableUnicode();
+    Report("unicode", g_unicode != nullptr, "BestAvailableUnicode fell back to libgrapheme");
+#else
     g_unicode = SkUnicodes::ICU::Make();
     Report("unicode", g_unicode != nullptr, "SkUnicodes::ICU::Make (system ICU)");
+#endif
     if (!g_unicode) {
         return;
     }

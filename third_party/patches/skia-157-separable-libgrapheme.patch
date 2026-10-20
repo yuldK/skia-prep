@@ -1,0 +1,52 @@
+Keeps skshaper from calling SkUnicodes::Libgrapheme::Make.
+
+With skia_use_libgrapheme the get_unicode() helpers in SkShaper_harfbuzz.cpp
+and SkShaper_skunicode.cpp try libgrapheme after ICU. The legacy factories
+(SkShaper::Make, MakeShaperDrivenWrapper, ...) call them, so skshaper.lib
+needed skunicode_libgrapheme.lib in every text consumer, also in one that
+never wants the fallback.
+
+This drops that branch. The helpers try ICU only, as they did without
+libgrapheme. SkShapers::BestAvailableUnicode() in utils/FactoryHelpers.h is
+header-only and compiled with the consumer's defines, so a consumer that
+defines SK_UNICODE_LIBGRAPHEME_IMPLEMENTATION and links the fallback archive
+still gets ICU first and libgrapheme second from it.
+
+diff --git a/modules/skshaper/src/SkShaper_harfbuzz.cpp b/modules/skshaper/src/SkShaper_harfbuzz.cpp
+index abeb937..dd3096f 100644
+--- a/modules/skshaper/src/SkShaper_harfbuzz.cpp
++++ b/modules/skshaper/src/SkShaper_harfbuzz.cpp
+@@ -1592,11 +1592,9 @@ static sk_sp<SkUnicode> get_unicode() {
+         return unicode;
+     }
+ #endif  // defined(SK_UNICODE_ICU_IMPLEMENTATION)
+-#if defined(SK_UNICODE_LIBGRAPHEME_IMPLEMENTATION)
+-    if (auto unicode = SkUnicodes::Libgrapheme::Make()) {
+-        return unicode;
+-    }
+-#endif
++    // skia-prep: libgrapheme is not tried here (skia-157-separable-libgrapheme.patch).
++    // A consumer that links skunicode_libgrapheme gets it through
++    // SkShapers::BestAvailableUnicode().
+ #if defined(SK_UNICODE_ICU4X_IMPLEMENTATION)
+     if (auto unicode = SkUnicodes::ICU4X::Make()) {
+         return unicode;
+diff --git a/modules/skshaper/src/SkShaper_skunicode.cpp b/modules/skshaper/src/SkShaper_skunicode.cpp
+index a18d081..cedb306 100644
+--- a/modules/skshaper/src/SkShaper_skunicode.cpp
++++ b/modules/skshaper/src/SkShaper_skunicode.cpp
+@@ -92,11 +92,9 @@ sk_sp<SkUnicode> get_unicode() {
+         return unicode;
+     }
+ #endif  // defined(SK_UNICODE_ICU_IMPLEMENTATION)
+-#if defined(SK_UNICODE_LIBGRAPHEME_IMPLEMENTATION)
+-    if (auto unicode = SkUnicodes::Libgrapheme::Make()) {
+-        return unicode;
+-    }
+-#endif
++    // skia-prep: libgrapheme is not tried here (skia-157-separable-libgrapheme.patch).
++    // A consumer that links skunicode_libgrapheme gets it through
++    // SkShapers::BestAvailableUnicode().
+ #if defined(SK_UNICODE_ICU4X_IMPLEMENTATION)
+     if (auto unicode = SkUnicodes::ICU4X::Make()) {
+         return unicode;

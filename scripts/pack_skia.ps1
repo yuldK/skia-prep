@@ -208,7 +208,8 @@ $common_notices += @(
     @{ id = 'libwebp'; name = 'libwebp'; path = (Join-Path $externals_root 'libwebp\COPYING') },
     @{ id = 'wuffs'; name = 'Wuffs'; path = (Join-Path $externals_root 'wuffs\LICENSE') },
     @{ id = 'harfbuzz'; name = 'HarfBuzz'; path = (Join-Path $externals_root 'harfbuzz\COPYING') },
-    @{ id = 'icu'; name = 'ICU (headers only; the platform ICU is loaded at run time)'; path = (Join-Path $externals_root 'icu\LICENSE') },
+    @{ id = 'icu'; name = 'ICU (headers, and the bidi subset compiled into skunicode_libgrapheme; no ICU data ships)'; path = (Join-Path $externals_root 'icu\LICENSE') },
+    @{ id = 'libgrapheme'; name = 'libgrapheme'; path = (Join-Path $externals_root 'libgrapheme\LICENSE') },
     @{ id = 'libavif'; name = 'libavif'; path = (Join-Path $externals_root 'libavif\LICENSE') },
     @{ id = 'libgav1'; name = 'libgav1'; path = (Join-Path $externals_root 'libgav1\LICENSE') },
     @{ id = 'libyuv'; name = 'libyuv'; path = (Join-Path $externals_root 'libyuv\LICENSE') },
@@ -1092,6 +1093,7 @@ $target_notices = @{
     'freetype2' = @('freetype'); 'libpng' = @('libpng'); 'zlib' = @('zlib')
     'cpu-features' = @('cpu-features'); 'skcms' = @('skcms'); 'skcms_TransformHsw' = @('skcms')
     'skcms_TransformSkx' = @('skcms'); 'vulkanmemoryallocator' = @('vulkanmemoryallocator')
+    'libgrapheme' = @('libgrapheme'); 'icu_bidi' = @('icu'); 'skunicode_libgrapheme' = @('skia')
 }
 $present_ids = @($notices | ForEach-Object { $_['id'] } | Where-Object { $_ } | Select-Object -Unique)
 $library_notices = [ordered]@{}
@@ -1181,10 +1183,11 @@ if (Test-Path -LiteralPath $milestone_file -PathType Leaf) {
         $milestone = $Matches[1]
     }
 }
-# build_skia.ps1이 거는 것과 같은 목록이다. 모듈 패치 넷은 언제나, rust 패치 둘은
+# build_skia.ps1이 거는 것과 같은 목록이다. 모듈 패치 다섯은 언제나, rust 패치는
 # 대상마다 다른 것을 건다.
 $patches = @('skia-157-separable-avif.patch', 'skia-157-skshaper-legacy-split.patch',
-    'skia-157-runtime-icu-system.patch', 'skia-157-module-archives.patch')
+    'skia-157-runtime-icu-system.patch', 'skia-157-module-archives.patch',
+    'skia-157-separable-libgrapheme.patch')
 if ($png_codec -eq 'rust') {
     $patches += if ($is_android) {
         @('skia-157-bazel-rust-android-ndk.patch',

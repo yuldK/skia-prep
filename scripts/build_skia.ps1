@@ -720,6 +720,19 @@ if ($argument_text -match 'skia_prep_avif_archive\s*=\s*true') {
 # python을 먼저 정한다.
 # -FetchTools가 fetch 스크립트를 돌릴 때 쓰는 것도 이것이다.
 $python = Resolve-Python -given $PythonPath
+# GN의 Windows 도구사슬은 copy 도구에 `python3`을 이름으로 박아 둔다
+# (gn/toolchain/BUILD.gn). --script-executable은 그 자리에 닿지 않아, PATH에서 먼저 걸리는
+# WindowsApps의 스텁이 9009로 끝난다. libgrapheme이 UCD 표를 복사하며 처음 드러났다
+# (2026-10-21). 찾은 Python의 자리에 python3.exe가 있으면 그 자리를 PATH 앞에 세운다.
+if ($windows_host) {
+    $python_directory = Split-Path -Parent $python
+    if (Test-Path -LiteralPath (Join-Path $python_directory 'python3.exe') -PathType Leaf) {
+        $env:PATH = '{0}{1}{2}' -f $python_directory, [System.IO.Path]::PathSeparator, $env:PATH
+    }
+    else {
+        Write-Warning "No python3.exe beside $python; GN copy steps call python3 by name."
+    }
+}
 $gn_hint = if ($windows_host) { 'The CIPD package page for gn/gn/windows-amd64 has it.' }
 else { 'The CIPD package page for gn/gn/linux-amd64 has it.' }
 $ninja_hint = if ($windows_host) { 'The ninja-build releases page has ninja-win.zip.' }
@@ -870,6 +883,8 @@ Run: git submodule update --init third_party/skia-externals/$name
 #      runtime-icu-system    : runtime ICU가 Android의 libicu.so와 Windows의 icu.dll을 연다.
 #      module-archives       : 모듈 아카이브가 자기 오브젝트만 담는다. 그러지 않으면
 #                              skshaper가 HarfBuzz를, svg·skottie가 skia의 core를 복사해 든다.
+#      separable-libgrapheme : skshaper가 SkUnicodes::Libgrapheme::Make를 부르지 않는다.
+#                              그러지 않으면 모든 text 소비자가 fallback 아카이브를 링크한다.
 #    rust png 구성은 둘이 더 필요하고, **대상마다 다른 둘이다.** 서로 섞지 않는다 —
 #    Windows의 산출물 이름 패치를 Linux에 걸면 GN의 복사 단계가 없는 .lib을 찾는다.
 #      win-x64       : Windows bazel 산출물 이름을 고치고, Debug bazel C++
@@ -883,7 +898,8 @@ $patch_set = @(
     @('skia-157-separable-avif.patch', 'separable avif'),
     @('skia-157-skshaper-legacy-split.patch', 'skshaper legacy split'),
     @('skia-157-runtime-icu-system.patch', 'runtime icu system'),
-    @('skia-157-module-archives.patch', 'module archives'))
+    @('skia-157-module-archives.patch', 'module archives'),
+    @('skia-157-separable-libgrapheme.patch', 'separable libgrapheme'))
 if ($RustPng) {
     $patch_set += if ($is_android) {
         @(@('skia-157-bazel-rust-android-ndk.patch', 'rust android ndk'),

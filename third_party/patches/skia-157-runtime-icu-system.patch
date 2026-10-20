@@ -16,6 +16,9 @@ works SkUnicodes::ICU::Make() returns nullptr, as it did before.
 
 No ICU data ships with the package: the platform's ICU brings its own.
 
+SKIA_PREP_ICU_DISABLE, when set, makes the loader open nothing. It exists to test
+a consumer's fallback (to the libgrapheme backend) on a machine that has ICU.
+
 diff --git a/modules/skunicode/BUILD.gn b/modules/skunicode/BUILD.gn
 index 138d318..2b30923 100644
 --- a/modules/skunicode/BUILD.gn
@@ -32,17 +35,14 @@ index 138d318..2b30923 100644
          defines += [ "SK_UNICODE_RUNTIME_ICU_AVAILABLE" ]
          deps += [ "//third_party/icu:headers" ]
 diff --git a/modules/skunicode/src/SkUnicode_icu_runtime.cpp b/modules/skunicode/src/SkUnicode_icu_runtime.cpp
-index a76b056..b35cd9c 100644
+index a76b056..399f462 100644
 --- a/modules/skunicode/src/SkUnicode_icu_runtime.cpp
 +++ b/modules/skunicode/src/SkUnicode_icu_runtime.cpp
-@@ -9,50 +9,71 @@
+@@ -9,50 +9,73 @@
  #include "include/core/SkTypes.h"
  #include "modules/skunicode/src/SkUnicode_icupriv.h"
  
-+#if defined(SK_BUILD_FOR_WIN)
-+#include "src/core/SkLeanWindows.h"
-+#else
- #include <dlfcn.h>
+-#include <dlfcn.h>
 -
 -#define SK_RUNTIME_ICU_PATHS "libicuuc.so"
 -
@@ -61,7 +61,12 @@ index a76b056..b35cd9c 100644
 -        SkDEBUGF("ICU loader: failed to open libicuuc.\n");
 -        return nullptr;
 -    }
--
++#include <cstdlib>
+ 
++#if defined(SK_BUILD_FOR_WIN)
++#include "src/core/SkLeanWindows.h"
++#else
++#include <dlfcn.h>
 +#endif
 +
 +// skia-prep: also open the ICU that a platform offers to applications.
@@ -141,7 +146,7 @@ index a76b056..b35cd9c 100644
          }
  
          if (required) {
-@@ -63,24 +84,36 @@ std::unique_ptr<SkICULib> SkLoadICULib() {
+@@ -63,24 +86,43 @@ std::unique_ptr<SkICULib> SkLoadICULib() {
  
      SkICULib lib {};
  
@@ -175,6 +180,13 @@ index a76b056..b35cd9c 100644
 +}  // namespace
 +
 +std::unique_ptr<SkICULib> SkLoadICULib() {
++    // skia-prep: a test switch. With SKIA_PREP_ICU_DISABLE set to anything, no system
++    // ICU is opened, so a consumer's fallback (SkShapers::BestAvailableUnicode() going
++    // on to libgrapheme) can be exercised on a machine that has ICU.
++    if (const char* disable = getenv("SKIA_PREP_ICU_DISABLE"); disable && disable[0]) {
++        SkDEBUGF("ICU loader: SKIA_PREP_ICU_DISABLE is set; not opening a system ICU.\n");
++        return nullptr;
++    }
 +    for (const char* path : kLibPaths) {
 +        LibHandle handle = open_lib(path);
 +        if (!handle) {
