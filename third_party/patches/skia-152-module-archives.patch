@@ -1,0 +1,133 @@
+Makes each module archive hold only that module's own objects.
+
+skia_component() is a complete static library in a static build
+(gn/BUILDCONFIG.gn). Such an archive copies in the objects of every
+non-component dependency:
+  - skshaper.lib carried all of HarfBuzz (76 objects) beside harfbuzz.lib, and
+    skparagraph.lib took them over once skshaper stopped,
+  - svg.lib, sksg.lib and skottie.lib each carried the ~300 objects of :core
+    and :pathops through their direct dependency on the :pathops source set,
+    which skia.lib already holds,
+  - svg.lib and skottie.lib carried skresources.
+The duplicates link (they are the same objects), but an archive then no longer
+says which component it needs, which a consumer that picks features by archive
+depends on.
+
+This sets complete_static_lib = false on svg, sksg, skottie, skshaper and
+skparagraph and
+drops their :pathops dependency. :skia is untouched.
+
+diff --git a/modules/skottie/BUILD.gn b/modules/skottie/BUILD.gn
+index fc95703..eee0b09 100644
+--- a/modules/skottie/BUILD.gn
++++ b/modules/skottie/BUILD.gn
+@@ -16,13 +16,21 @@ if (skia_enable_skottie) {
+ 
+   skia_component("skottie") {
+     check_includes = false
++    # skia-prep: archive only this module's own objects. A component is a
++    # complete static library by default (gn/BUILDCONFIG.gn), which copies
++    # every non-component dependency into it (HarfBuzz into skshaper and
++    # skparagraph, skresources into svg and skottie). The package ships
++    # those as archives of their own.
++    complete_static_lib = false
+     import("skottie.gni")
+     public_configs = [ ":public_config" ]
+     public = skia_skottie_public
+     sources = skia_skottie_sources
+     configs = [ "../../:skia_private" ]
+     deps = [
+-      "../..:pathops",
++      # skia-prep: pathops is a source set over :core, so depending on it
++      # copied about 300 of skia's objects into this archive. skia.lib /
++      # libskia.a already holds pathops.
+       "../..:skia",
+       "../jsonreader",
+       "../skresources",
+diff --git a/modules/skparagraph/BUILD.gn b/modules/skparagraph/BUILD.gn
+index e4b94d0..999a201 100644
+--- a/modules/skparagraph/BUILD.gn
++++ b/modules/skparagraph/BUILD.gn
+@@ -23,6 +23,12 @@ if (skia_enable_skparagraph && skia_enable_skshaper && skia_enable_skunicode &&
+   }
+ 
+   skia_component("skparagraph") {
++    # skia-prep: archive only this module's own objects. A component is a
++    # complete static library by default (gn/BUILDCONFIG.gn), which copies
++    # every non-component dependency into it (HarfBuzz into skshaper and
++    # skparagraph, skresources into svg and skottie). The package ships
++    # those as archives of their own.
++    complete_static_lib = false
+     import("skparagraph.gni")
+     public_configs = [ ":public_config" ]
+     public = skparagraph_core_public
+diff --git a/modules/sksg/BUILD.gn b/modules/sksg/BUILD.gn
+index 3405da6..97b1c19 100644
+--- a/modules/sksg/BUILD.gn
++++ b/modules/sksg/BUILD.gn
+@@ -11,12 +11,20 @@ config("public_config") {
+ 
+ skia_component("sksg") {
+   check_includes = false
++  # skia-prep: archive only this module's own objects. A component is a
++  # complete static library by default (gn/BUILDCONFIG.gn), which copies
++  # every non-component dependency into it (HarfBuzz into skshaper and
++  # skparagraph, skresources into svg and skottie). The package ships
++  # those as archives of their own.
++  complete_static_lib = false
+   import("sksg.gni")
+   public_configs = [ ":public_config" ]
+   sources = skia_sksg_sources
+   configs = [ "../../:skia_private" ]
+   deps = [
+-    "../..:pathops",
++    # skia-prep: pathops is a source set over :core, so depending on it
++    # copied about 300 of skia's objects into this archive. skia.lib /
++    # libskia.a already holds pathops.
+     "../..:skia",
+   ]
+ }
+diff --git a/modules/skshaper/BUILD.gn b/modules/skshaper/BUILD.gn
+index 268e805..0f6b203 100644
+--- a/modules/skshaper/BUILD.gn
++++ b/modules/skshaper/BUILD.gn
+@@ -26,6 +26,12 @@ if (skia_enable_skshaper) {
+ 
+   skia_component("skshaper") {
+     check_includes = false
++    # skia-prep: archive only this module's own objects. A component is a
++    # complete static library by default (gn/BUILDCONFIG.gn), which copies
++    # every non-component dependency into it (HarfBuzz into skshaper and
++    # skparagraph, skresources into svg and skottie). The package ships
++    # those as archives of their own.
++    complete_static_lib = false
+     public_configs = [ ":public_config" ]
+     public = skia_shaper_public
+     deps = [ "../..:skia" ]
+diff --git a/modules/svg/BUILD.gn b/modules/svg/BUILD.gn
+index 8216ca6..b5c0b72 100644
+--- a/modules/svg/BUILD.gn
++++ b/modules/svg/BUILD.gn
+@@ -13,13 +13,21 @@ if (skia_enable_svg && skia_use_expat) {
+ 
+   skia_component("svg") {
+     check_includes = false
++    # skia-prep: archive only this module's own objects. A component is a
++    # complete static library by default (gn/BUILDCONFIG.gn), which copies
++    # every non-component dependency into it (HarfBuzz into skshaper and
++    # skparagraph, skresources into svg and skottie). The package ships
++    # those as archives of their own.
++    complete_static_lib = false
+     import("svg.gni")
+     public_configs = [ ":public_config" ]
+     public = skia_svg_renderer_public
+     sources = skia_svg_renderer_sources
+     configs = [ "../../:skia_private" ]
+     deps = [
+-      "../..:pathops",
++      # skia-prep: pathops is a source set over :core, so depending on it
++      # copied about 300 of skia's objects into this archive. skia.lib /
++      # libskia.a already holds pathops.
+       "../..:skia",
+       "../skresources",
+       "../skshaper",

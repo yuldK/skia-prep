@@ -99,6 +99,32 @@ else {
 }
 $rust_png_components = @('librust_png_ffi_rs.a', 'libcxx_cc.a')
 
+# 기능별 아카이브다 (SVG·텍스트·Skottie·AVIF). 목록은 third_party/features.json이 들고
+# 있고, scripts/probe_features.ps1이 같은 목록으로 기능마다 링크해 본다. 위의 core 목록은
+# 그 파일의 core와 같다 — 소비자가 지금 링크하는 것이 그것이라 여기 그대로 둔다.
+$feature_map = Get-Content -Raw -LiteralPath (Join-Path $repository_root 'third_party\features.json') |
+    ConvertFrom-Json
+$feature_components = @($feature_map.features.PSObject.Properties |
+        Where-Object { $_.Name -ne 'core' } |
+        ForEach-Object { $_.Value.libraries.$Target } |
+        Select-Object -Unique)
+$core_listed = @($feature_map.features.core.libraries.$Target | Where-Object { $_ -notin $rust_png_components })
+if (Compare-Object $core_listed $components) {
+    throw 'third_party/features.json lists a different core than pack_skia.ps1. Keep the two in step.'
+}
+$components += $feature_components
+
+# 모듈의 공개 헤더다. 패키지 루트에서 같은 상대 경로로 놓인다 (luil은 패키지 루트를
+# include 경로로 잡는다). 이 헤더들이 여는 Skia 내부 헤더(src/core/SkTHash.h 등)는
+# 아래 3단계가 include를 따라가 함께 싣는다.
+$module_header_directories = @(
+    'modules/svg/include', 'modules/skshaper/include', 'modules/skunicode/include',
+    'modules/skparagraph/include', 'modules/skottie/include', 'modules/sksg/include',
+    'modules/skresources/include')
+# FactoryHelpers.h는 skshaper의 공개 헤더 목록(skia_shaper_public)에 든다. 소비자의
+# 정의로 SkShapers::BestAvailable()을 고르는 inline 헬퍼다.
+$module_header_files = @('modules/skshaper/utils/FactoryHelpers.h')
+
 # 같은 Skia commit에서 나온 패키지를 구별하는 번호다.
 #
 # 태그와 자산 이름이 Skia의 commit만 담았던 동안에는, 소스가 같고 **빌드가 다른**
@@ -116,9 +142,12 @@ $rust_png_components = @('librust_png_ffi_rs.a', 'libcxx_cc.a')
 #
 #   win-x64 r3  prefix map을 더해 Debug 디버그 정보에서 생산자 경로를 걷었다.
 #               r2 Debug 자산에는 사용자 이름이 실려 있다 (docs/skia-build.md 8.7).
+#               그리고 기능별 아카이브(SVG·텍스트·Skottie·AVIF)가 더해졌다.
+#               r3은 이 둘을 함께 실은 첫 발행이다.
+#   android-arm64 r2  기능별 아카이브(SVG·텍스트·Skottie·AVIF)가 더해졌다.
 $package_revisions = @{
     'win-x64'       = 3
-    'android-arm64' = 1
+    'android-arm64' = 2
 }
 $package_revision = $package_revisions[$Target]
 
@@ -141,31 +170,45 @@ $externals_root = Join-Path $skia_root 'third_party\externals'
 # 고른다** — LICENSE.TXT(고르는 규칙)와 docs/FTL.TXT(본문)를 함께 싣는다. FTL은
 # 제품 문서에 FreeType을 밝히라고 요구하므로 그 의무가 앱을 내는 쪽으로 넘어간다.
 # NOTICE.md 머리에 그 문장을 적는다.
+#
+# 항목마다 id가 있다. NOTICE.json이 "어느 아카이브·기능이 어느 고지를 요구하는가"를
+# 그 id로 적는다 (아래 5단계). 한 구성요소가 원문 파일을 여럿 두면 id를 같이 쓴다.
+#
+# 기능 아카이브의 고지는 언제나 싣는다 — 패키지에 그 아카이브가 들어 있기 때문이다.
+# 앱이 어느 것을 실어야 하는가는 NOTICE.json의 features가 말한다.
+#   HarfBuzz(Old MIT), ICU(Unicode License V3; 헤더로만 쓰고 데이터는 싣지 않는다),
+#   libavif(BSD-2), libgav1(Apache-2.0), libyuv(BSD-3 + 특허 허여), Windows의 expat(MIT).
 $common_notices = @(
-    @{ name = 'Skia'; path = (Join-Path $skia_root 'LICENSE') },
-    @{ name = 'skcms'; path = (Join-Path $skia_root 'modules\skcms\README.chromium') })
+    @{ id = 'skia'; name = 'Skia'; path = (Join-Path $skia_root 'LICENSE') },
+    @{ id = 'skcms'; name = 'skcms'; path = (Join-Path $skia_root 'modules\skcms\README.chromium') })
 if ($is_android) {
     $common_notices += @(
-        @{ name = 'Vulkan Memory Allocator'; path = (Join-Path $externals_root 'vulkanmemoryallocator\LICENSE.txt') },
-        @{ name = 'FreeType - license choice'; path = (Join-Path $externals_root 'freetype\LICENSE.TXT') },
-        @{ name = 'FreeType - The FreeType Project License (FTL)'; path = (Join-Path $externals_root 'freetype\docs\FTL.TXT') },
-        @{ name = 'Expat'; path = (Join-Path $externals_root 'expat\COPYING') })
+        @{ id = 'vulkanmemoryallocator'; name = 'Vulkan Memory Allocator'; path = (Join-Path $externals_root 'vulkanmemoryallocator\LICENSE.txt') },
+        @{ id = 'freetype'; name = 'FreeType - license choice'; path = (Join-Path $externals_root 'freetype\LICENSE.TXT') },
+        @{ id = 'freetype'; name = 'FreeType - The FreeType Project License (FTL)'; path = (Join-Path $externals_root 'freetype\docs\FTL.TXT') })
 }
 else {
     $common_notices += @(
-        @{ name = 'SPIRV-Cross'; path = (Join-Path $externals_root 'spirv-cross\LICENSE') },
-        @{ name = 'SPIRV-Headers'; path = (Join-Path $externals_root 'spirv-headers\LICENSE') },
-        @{ name = 'D3D12 Memory Allocator'; path = (Join-Path $externals_root 'd3d12allocator\LICENSE.txt') },
-        @{ name = 'D3D12 Memory Allocator - Notices'; path = (Join-Path $externals_root 'd3d12allocator\NOTICES.txt') })
+        @{ id = 'spirv-cross'; name = 'SPIRV-Cross'; path = (Join-Path $externals_root 'spirv-cross\LICENSE') },
+        @{ id = 'spirv-headers'; name = 'SPIRV-Headers'; path = (Join-Path $externals_root 'spirv-headers\LICENSE') },
+        @{ id = 'd3d12allocator'; name = 'D3D12 Memory Allocator'; path = (Join-Path $externals_root 'd3d12allocator\LICENSE.txt') },
+        @{ id = 'd3d12allocator'; name = 'D3D12 Memory Allocator - Notices'; path = (Join-Path $externals_root 'd3d12allocator\NOTICES.txt') })
 }
 $common_notices += @(
-    @{ name = 'libjpeg-turbo'; path = (Join-Path $externals_root 'libjpeg-turbo\LICENSE.md') },
-    @{ name = 'libjpeg-turbo - IJG License'; path = (Join-Path $externals_root 'libjpeg-turbo\README.ijg') },
-    @{ name = 'libwebp'; path = (Join-Path $externals_root 'libwebp\COPYING') },
-    @{ name = 'Wuffs'; path = (Join-Path $externals_root 'wuffs\LICENSE') })
+    @{ id = 'expat'; name = 'Expat'; path = (Join-Path $externals_root 'expat\COPYING') },
+    @{ id = 'libjpeg-turbo'; name = 'libjpeg-turbo'; path = (Join-Path $externals_root 'libjpeg-turbo\LICENSE.md') },
+    @{ id = 'libjpeg-turbo'; name = 'libjpeg-turbo - IJG License'; path = (Join-Path $externals_root 'libjpeg-turbo\README.ijg') },
+    @{ id = 'libwebp'; name = 'libwebp'; path = (Join-Path $externals_root 'libwebp\COPYING') },
+    @{ id = 'wuffs'; name = 'Wuffs'; path = (Join-Path $externals_root 'wuffs\LICENSE') },
+    @{ id = 'harfbuzz'; name = 'HarfBuzz'; path = (Join-Path $externals_root 'harfbuzz\COPYING') },
+    @{ id = 'icu'; name = 'ICU (headers only; the platform ICU is loaded at run time)'; path = (Join-Path $externals_root 'icu\LICENSE') },
+    @{ id = 'libavif'; name = 'libavif'; path = (Join-Path $externals_root 'libavif\LICENSE') },
+    @{ id = 'libgav1'; name = 'libgav1'; path = (Join-Path $externals_root 'libgav1\LICENSE') },
+    @{ id = 'libyuv'; name = 'libyuv'; path = (Join-Path $externals_root 'libyuv\LICENSE') },
+    @{ id = 'libyuv'; name = 'libyuv - Patent grant'; path = (Join-Path $externals_root 'libyuv\PATENTS') })
 $libpng_notices = @(
-    @{ name = 'libpng'; path = (Join-Path $externals_root 'libpng\LICENSE') },
-    @{ name = 'zlib'; path = (Join-Path $externals_root 'zlib\LICENSE') })
+    @{ id = 'libpng'; name = 'libpng'; path = (Join-Path $externals_root 'libpng\LICENSE') },
+    @{ id = 'zlib'; name = 'zlib'; path = (Join-Path $externals_root 'zlib\LICENSE') })
 
 function Get-FileHashText {
     param([string]$path)
@@ -565,7 +608,62 @@ foreach ($item in Get-ChildItem -LiteralPath $include_source -Force) {
 New-Item -ItemType Directory -Force -Path (Join-Path $package_root 'modules') | Out-Null
 Copy-Item -LiteralPath (Join-Path $skia_root 'modules\skcms') `
     -Destination (Join-Path $package_root 'modules\skcms') -Recurse -Force
-Write-Output 'headers        : include, modules/skcms'
+
+# 모듈 헤더와, 그것들이 따옴표 include로 여는 것 전부.
+#
+# 모듈의 공개 헤더는 Skia 내부 헤더를 연다 — SkSVGDOM.h가 SkSVGIDMapper.h를 거쳐
+# src/core/SkTHash.h를, SkResources.h도 그것을 연다. 그래서 새로 실은 헤더에서 시작해
+# include를 따라가며 패키지에 없는 것을 Skia 트리에서 가져온다. include/는 이미 통째로
+# 실었으므로 따라가지 않는다(따라가면 조건부 include까지 끌려온다). 트리에 없는 이름
+# (SkUserConfig.h처럼 include 경로로 찾는 것)은 건너뛴다.
+$header_queue = [System.Collections.Generic.Queue[string]]::new()
+foreach ($relative in $module_header_directories) {
+    $source_directory = Join-Path $skia_root $relative
+    $target_directory = Join-Path $package_root $relative
+    New-Item -ItemType Directory -Force -Path $target_directory | Out-Null
+    foreach ($file in Get-ChildItem -LiteralPath $source_directory -File -Filter '*.h') {
+        Copy-Item -LiteralPath $file.FullName -Destination $target_directory -Force
+        $header_queue.Enqueue(($relative + '/' + $file.Name))
+    }
+}
+foreach ($relative in $module_header_files) {
+    # $target이라 부르지 않는다 — PowerShell 이름은 대소문자를 가리지 않아 -Target과 겹친다.
+    $header_file = Join-Path $package_root $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $header_file) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $skia_root $relative) -Destination $header_file -Force
+    $header_queue.Enqueue($relative)
+}
+$followed = [System.Collections.Generic.HashSet[string]]::new()
+$private_headers = [System.Collections.Generic.List[string]]::new()
+while ($header_queue.Count -gt 0) {
+    $relative = $header_queue.Dequeue()
+    if (-not $followed.Add($relative)) {
+        continue
+    }
+    $text = Get-Content -Raw -LiteralPath (Join-Path $package_root $relative)
+    foreach ($match in [regex]::Matches($text, '(?m)^\s*#\s*include\s+"([^"]+)"')) {
+        $included = $match.Groups[1].Value
+        if ($included.StartsWith('include/') -or $followed.Contains($included)) {
+            continue
+        }
+        $source = Join-Path $skia_root $included
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            continue
+        }
+        $header_file = Join-Path $package_root $included
+        if (-not (Test-Path -LiteralPath $header_file -PathType Leaf)) {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $header_file) | Out-Null
+            Copy-Item -LiteralPath $source -Destination $header_file -Force
+            $private_headers.Add($included)
+        }
+        $header_queue.Enqueue($included)
+    }
+}
+Write-Output ('headers        : include, modules/skcms, {0} module include dirs, {1} private headers they open' -f
+    $module_header_directories.Count, $private_headers.Count)
+foreach ($header in ($private_headers | Sort-Object)) {
+    Write-Output "                 + $header"
+}
 
 # ---------------------------------------------------------------------------
 # 4. 산출물.
@@ -711,6 +809,10 @@ $notice_text = [System.Text.StringBuilder]::new()
 [void]$notice_text.AppendLine('저작권자와 기여자의 이름을 이 배포물의 홍보에 쓰지 않는다.')
 [void]$notice_text.AppendLine()
 [void]$notice_text.AppendLine('Skia 소스에는 이 저장소의 패치가 적용되어 있을 수 있다 (VERSION.json의 patches).')
+[void]$notice_text.AppendLine()
+[void]$notice_text.AppendLine('이 문서는 패키지에 든 모든 것의 고지다. 기능(SVG·텍스트·Skottie·AVIF)을 쓰지 않는 앱은')
+[void]$notice_text.AppendLine('그 기능의 고지를 싣지 않아도 된다 — 기능마다 실행 파일에 들어오는 구성요소는')
+[void]$notice_text.AppendLine('`NOTICE.json`의 `features`가, 아카이브마다 담긴 구성요소는 `libraries`가 적는다.')
 if ($png_codec -eq 'rust') {
     [void]$notice_text.AppendLine('rust 갈래의 `png` crate에는 Skia의 captured-chunks.patch가 적용되어 있다.')
     [void]$notice_text.AppendLine(
@@ -738,6 +840,103 @@ $notice_path = Join-Path $package_root 'NOTICE.md'
 Set-Content -LiteralPath $notice_path -Value $notice_text.ToString() -Encoding UTF8
 Write-Output ('notices        : {0} components -> NOTICE.md' -f $notices.Count)
 
+# NOTICE.json — 어느 아카이브와 어느 기능이 어느 고지를 요구하는가.
+#
+# 소비자가 기능을 옵션으로 뺄 때, 뺀 기능의 고지까지 앱에 싣지 않게 하려는 것이다.
+# 두 갈래를 적는다.
+#   libraries : 아카이브에 **담긴 것**이다. 멤버를 하나씩 걸어 GN 대상 이름(오브젝트 이름의
+#               첫 마디, 예: harfbuzz.hb-shape.obj)으로 출처를 가른다. 손으로 적지 않는다.
+#   features  : 그 기능을 쓸 때 실행 파일에 **들어오는 것**이다. third_party/features.json이
+#               적고, scripts/probe_features.ps1이 링크 맵으로 확인한다. 둘이 다를 수 있다 —
+#               Windows의 skia.lib는 expat을 담지만, expat은 SVG(XML 파서)를 쓸 때만 링크된다.
+# rust 아카이브는 crate 전부와 Rust 표준 라이브러리, 그리고 함께 담긴 Skia 오브젝트다.
+$llvm_ar = if ($is_android) {
+    Join-Path "$($toolchain_record.ndk)" 'toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+}
+else {
+    Join-Path "$($toolchain_record.clang_win)" 'bin\llvm-ar.exe'
+}
+if (-not (Test-Path -LiteralPath $llvm_ar -PathType Leaf)) {
+    throw "llvm-ar was not found next to the compiler that built this package: $llvm_ar"
+}
+$target_notices = @{
+    'expat' = @('expat'); 'harfbuzz' = @('harfbuzz'); 'skunicode_icu' = @('skia', 'icu')
+    'libjpeg' = @('libjpeg-turbo'); 'libjpeg12' = @('libjpeg-turbo'); 'libjpeg16' = @('libjpeg-turbo')
+    'libwebp' = @('libwebp'); 'libwebp_sse41' = @('libwebp'); 'wuffs' = @('wuffs')
+    'libavif' = @('libavif'); 'libgav1' = @('libgav1'); 'libyuv' = @('libyuv')
+    'd3d12allocator' = @('d3d12allocator'); 'spirv_cross' = @('spirv-cross', 'spirv-headers')
+    'freetype2' = @('freetype'); 'libpng' = @('libpng'); 'zlib' = @('zlib')
+    'cpu-features' = @('cpu-features'); 'skcms' = @('skcms'); 'skcms_TransformHsw' = @('skcms')
+    'skcms_TransformSkx' = @('skcms')
+}
+$present_ids = @($notices | ForEach-Object { $_['id'] } | Where-Object { $_ } | Select-Object -Unique)
+$library_notices = [ordered]@{}
+foreach ($component in ($builds[0].required | Sort-Object)) {
+    $ids = [System.Collections.Generic.SortedSet[string]]::new()
+    if ($component -in $rust_png_components) {
+        # libcxx_cc.a는 cxx crate의 C++ 쪽뿐이다. ffi 아카이브는 Skia 오브젝트도 함께 담는다.
+        [void]$ids.Add('rust')
+        if ($component -eq 'librust_png_ffi_rs.a') {
+            [void]$ids.Add('skia')
+        }
+    }
+    else {
+        $member_archive = Join-Path $builds[0].directory $component
+        foreach ($member in (& $llvm_ar t $member_archive)) {
+            $prefix = (($member -split '[/\\]')[-1] -split '\.')[0]
+            # zlib의 GN 대상은 갈래가 여럿이다 (zlib_adler32_simd 등).
+            if ($prefix -like 'zlib*') { $prefix = 'zlib' }
+            if ($prefix -like 'libwebp*') { $prefix = 'libwebp' }
+            $mapped = if ($target_notices.ContainsKey($prefix)) { $target_notices[$prefix] } else { @('skia') }
+            foreach ($id in $mapped) { [void]$ids.Add($id) }
+        }
+    }
+    $missing_ids = @($ids | Where-Object { $_ -ne 'rust' -and $_ -notin $present_ids })
+    if ($missing_ids) {
+        throw "$component carries $($missing_ids -join ', '), and NOTICE.md has no such notice."
+    }
+    $library_notices[$component] = @($ids)
+}
+$feature_records = [ordered]@{}
+foreach ($feature in $feature_map.features.PSObject.Properties) {
+    $value = $feature.Value
+    $feature_records[$feature.Name] = [ordered]@{
+        description      = $value.description
+        requires         = @($value.requires)
+        libraries        = @($value.libraries.$Target)
+        system_libraries = @($value.system_libraries.$Target)
+        notices          = @($value.notices.$Target)
+    }
+    foreach ($id in $value.notices.$Target) {
+        if ($id -ne 'rust' -and $id -notin $present_ids) {
+            throw "third_party/features.json gives $($feature.Name) the notice $id, and NOTICE.md has no such notice."
+        }
+    }
+}
+$notice_ids = [ordered]@{}
+foreach ($id in ($present_ids + @('rust') | Select-Object -Unique)) {
+    $sections = if ($id -eq 'rust') {
+        @($notices | Where-Object { $_.name -like 'Rust crate:*' } | ForEach-Object { $_.name }) +
+        @("Rust standard library ($rust_document)")
+    }
+    else {
+        @($notices | Where-Object { $_['id'] -eq $id } | ForEach-Object { $_.name })
+    }
+    $notice_ids[$id] = $sections
+}
+$notice_map = [ordered]@{
+    schema    = 1
+    target    = $Target
+    comment   = 'notices: the NOTICE.md sections ("Component: ...") of each id. libraries: what each archive contains. features: what an executable links in when it uses the feature (core is always in). An app ships the union of features.<used>.notices.'
+    notices   = $notice_ids
+    libraries = $library_notices
+    features  = $feature_records
+}
+Set-Content -LiteralPath (Join-Path $package_root 'NOTICE.json') `
+    -Value ($notice_map | ConvertTo-Json -Depth 8) -Encoding UTF8
+Write-Output ('notice map     : {0} archives, {1} features -> NOTICE.json' -f $library_notices.Count,
+    $feature_records.Count)
+
 # ---------------------------------------------------------------------------
 # 6. VERSION.json.
 # ---------------------------------------------------------------------------
@@ -753,10 +952,12 @@ if (Test-Path -LiteralPath $milestone_file -PathType Leaf) {
         $milestone = $Matches[1]
     }
 }
-# build_skia.ps1이 대상마다 다른 두 패치를 건다. 여기 적는 목록도 그것과 같다.
-$patches = @()
+# build_skia.ps1이 거는 것과 같은 목록이다. 모듈 패치 넷은 언제나, rust 패치 둘은
+# 대상마다 다른 것을 건다.
+$patches = @('skia-152-separable-avif.patch', 'skia-152-skshaper-legacy-split.patch',
+    'skia-152-runtime-icu-system.patch', 'skia-152-module-archives.patch')
 if ($png_codec -eq 'rust') {
-    $patches = if ($is_android) {
+    $patches += if ($is_android) {
         @('skia-152-bazel-rust-android-triples.patch',
             'skia-152-bazel-rust-android-platform.patch')
     }

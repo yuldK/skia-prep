@@ -44,6 +44,13 @@ else {
     $libpng_components = @('libpng.lib', 'zlib.lib')
 }
 $rust_png_components = @('librust_png_ffi_rs.a', 'libcxx_cc.a')
+# 기능별 아카이브다 (SVG·텍스트·Skottie·AVIF). pack_skia.ps1과 같은 곳에서 읽는다.
+$feature_map = Get-Content -Raw -LiteralPath (Join-Path $repository_root 'third_party\features.json') |
+    ConvertFrom-Json
+$components += @($feature_map.features.PSObject.Properties |
+        Where-Object { $_.Name -ne 'core' } |
+        ForEach-Object { $_.Value.libraries.$Target } |
+        Select-Object -Unique)
 # 이 저장소가 고정한 Skia의 밀번이다 (docs/skia-build.md 7).
 # rust png 갈래는 152 아래에서 아예 서지 않는다 (5.3).
 $minimum_milestone = 152
@@ -54,7 +61,12 @@ $minimum_milestone = 152
 $codec_arguments = @(
     @{ name = 'skia_use_libjpeg_turbo_decode'; reason = 'jpeg decoding' },
     @{ name = 'skia_use_libwebp_decode'; reason = 'webp decoding, still and animated' },
-    @{ name = 'skia_use_wuffs'; reason = 'gif decoding' })
+    @{ name = 'skia_use_wuffs'; reason = 'gif decoding' },
+    @{ name = 'skia_enable_svg'; reason = 'the svg feature (SkSVGDOM)' },
+    @{ name = 'skia_enable_skottie'; reason = 'the skottie feature' },
+    @{ name = 'skia_use_harfbuzz'; reason = 'the text feature (SkShapers::HB, SkParagraph)' },
+    @{ name = 'skia_use_runtime_icu'; reason = 'SkUnicode loads the platform ICU; no ICU data ships' },
+    @{ name = 'skia_prep_avif_archive'; reason = 'AVIF in its own archive, outside the default decoder list' })
 $required_arguments = if ($is_android) {
     @(
         @{ name = 'skia_use_vulkan'; reason = 'the Android GPU backend' },
@@ -70,7 +82,9 @@ else {
 # 뒤엣것은 **기본값이 is_clang이라 명시하지 않으면 저절로 켜진다.**
 $forbidden_arguments = @(
     @{ name = 'is_trivial_abi'; reason = 'would change the ABI seen by MSVC consumers' },
-    @{ name = 'skia_use_partition_alloc'; reason = 'defaults to is_clang; pulls in a new external' })
+    @{ name = 'skia_use_partition_alloc'; reason = 'defaults to is_clang; pulls in a new external' },
+    @{ name = 'skia_use_libavif'; reason = 'puts AVIF in the default decoder list of skia itself' },
+    @{ name = 'skia_use_system_icu'; reason = 'the package loads the platform ICU at run time instead' })
 $failures = [System.Collections.Generic.List[string]]::new()
 
 # clang-cl이 낸 object인지 정적으로 판정한다.

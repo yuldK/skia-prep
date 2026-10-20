@@ -1,0 +1,176 @@
+Moves the legacy SkShaper factories out of SkShaper.cpp into SkShaper_legacy.cpp.
+
+SkShaper::Make, PurgeCaches, MakeBiDiRunIterator and MakeScriptRunIterator
+reference SkShapers::HB and SkUnicode when HarfBuzz and SkUnicode are enabled.
+They share SkShaper.cpp with MakeFontMgrRunIterator and
+MakeStdLanguageRunIterator, which modules/svg calls. Pulling that one object
+file therefore pulled HarfBuzz and SkUnicode into every SVG consumer. After the
+move an SVG-only consumer links svg + skshaper + skresources without them.
+
+The code is unchanged. SK_DISABLE_LEGACY_SKSHAPER_FUNCTIONS is not used for
+this because it also removes pure virtual SkShaper::shape overloads, which
+changes the vtable that consumers compile against.
+
+diff --git a/modules/skshaper/skshaper.gni b/modules/skshaper/skshaper.gni
+index 8872e10..8661c6f 100644
+--- a/modules/skshaper/skshaper.gni
++++ b/modules/skshaper/skshaper.gni
+@@ -26,6 +26,7 @@ skia_shaper_public = [
+ skia_shaper_primitive_sources = [
+   "$_modules/skshaper/src/SkShaper.cpp",
+   "$_modules/skshaper/src/SkShaper_factory.cpp",
++  "$_modules/skshaper/src/SkShaper_legacy.cpp",
+   "$_modules/skshaper/src/SkShaper_primitive.cpp",
+ ]
+ 
+diff --git a/modules/skshaper/src/SkShaper.cpp b/modules/skshaper/src/SkShaper.cpp
+index ef62ab5..da72906 100644
+--- a/modules/skshaper/src/SkShaper.cpp
++++ b/modules/skshaper/src/SkShaper.cpp
+@@ -20,62 +20,6 @@
+ #include <string>
+ #include <utility>
+ 
+-#if !defined(SK_DISABLE_LEGACY_SKSHAPER_FUNCTIONS)
+-
+-#if defined(SK_SHAPER_HARFBUZZ_AVAILABLE)
+-#include "modules/skshaper/include/SkShaper_harfbuzz.h"
+-#endif
+-
+-#if defined(SK_SHAPER_CORETEXT_AVAILABLE)
+-#include "modules/skshaper/include/SkShaper_coretext.h"
+-#endif
+-
+-#endif  // !defined(SK_DISABLE_LEGACY_SKSHAPER_FUNCTIONS)
+-
+-#if !defined(SK_DISABLE_LEGACY_SKSHAPER_FUNCTIONS)
+-std::unique_ptr<SkShaper> SkShaper::Make(sk_sp<SkFontMgr> fallback) {
+-#if defined(SK_SHAPER_HARFBUZZ_AVAILABLE) && defined(SK_SHAPER_UNICODE_AVAILABLE)
+-    std::unique_ptr<SkShaper> shaper = MakeShapeThenWrap(std::move(fallback));
+-    if (shaper) {
+-        return shaper;
+-    }
+-#elif defined(SK_SHAPER_CORETEXT_AVAILABLE)
+-    if (auto shaper = SkShapers::CT::CoreText()) {
+-        return shaper;
+-    }
+-#endif
+-    return SkShapers::Primitive::PrimitiveText();
+-}
+-
+-void SkShaper::PurgeCaches() {
+-#if defined(SK_SHAPER_HARFBUZZ_AVAILABLE) && defined(SK_SHAPER_UNICODE_AVAILABLE)
+-    SkShapers::HB::PurgeCaches();
+-#endif
+-}
+-
+-std::unique_ptr<SkShaper::BiDiRunIterator>
+-SkShaper::MakeBiDiRunIterator(const char* utf8, size_t utf8Bytes, uint8_t bidiLevel) {
+-#if defined(SK_SHAPER_UNICODE_AVAILABLE)
+-      std::unique_ptr<SkShaper::BiDiRunIterator> bidi = MakeIcuBiDiRunIterator(utf8, utf8Bytes, bidiLevel);
+-      if (bidi) {
+-          return bidi;
+-      }
+-#endif
+-    return std::make_unique<SkShaper::TrivialBiDiRunIterator>(bidiLevel, utf8Bytes);
+-}
+-
+-std::unique_ptr<SkShaper::ScriptRunIterator>
+-SkShaper::MakeScriptRunIterator(const char* utf8, size_t utf8Bytes, SkFourByteTag scriptTag) {
+-#if defined(SK_SHAPER_HARFBUZZ_AVAILABLE) && defined(SK_SHAPER_UNICODE_AVAILABLE)
+-    std::unique_ptr<SkShaper::ScriptRunIterator> script =
+-            SkShapers::HB::ScriptRunIterator(utf8, utf8Bytes, scriptTag);
+-    if (script) {
+-        return script;
+-    }
+-#endif
+-    return std::make_unique<SkShaper::TrivialScriptRunIterator>(scriptTag, utf8Bytes);
+-}
+-#endif  // !defined(SK_DISABLE_LEGACY_SKSHAPER_FUNCTIONS)
+ 
+ SkShaper::SkShaper() {}
+ SkShaper::~SkShaper() {}
+diff --git a/modules/skshaper/src/SkShaper_legacy.cpp b/modules/skshaper/src/SkShaper_legacy.cpp
+new file mode 100644
+index 0000000..4f76482
+--- /dev/null
++++ b/modules/skshaper/src/SkShaper_legacy.cpp
+@@ -0,0 +1,78 @@
++/*
++ * Copyright 2018 Google LLC
++ *
++ * Use of this source code is governed by a BSD-style license that can be
++ * found in the LICENSE file.
++ */
++
++// skia-prep: the legacy SkShaper factories, moved out of SkShaper.cpp.
++//
++// With HarfBuzz and SkUnicode enabled these call into SkShaper_harfbuzz.cpp and
++// SkShaper_skunicode.cpp. SkShaper.cpp also holds MakeFontMgrRunIterator and
++// MakeStdLanguageRunIterator, which the SVG module calls, so while both lived in
++// one object file an SVG-only consumer had to link HarfBuzz and SkUnicode too.
++// Nothing here changes; only the object file boundary moves.
++
++#include "include/core/SkFontMgr.h"
++#include "include/core/SkRefCnt.h"
++#include "modules/skshaper/include/SkShaper.h"
++
++#include <memory>
++#include <utility>
++
++#if !defined(SK_DISABLE_LEGACY_SKSHAPER_FUNCTIONS)
++
++#if defined(SK_SHAPER_HARFBUZZ_AVAILABLE)
++#include "modules/skshaper/include/SkShaper_harfbuzz.h"
++#endif
++
++#if defined(SK_SHAPER_CORETEXT_AVAILABLE)
++#include "modules/skshaper/include/SkShaper_coretext.h"
++#endif
++
++#endif  // !defined(SK_DISABLE_LEGACY_SKSHAPER_FUNCTIONS)
++
++#if !defined(SK_DISABLE_LEGACY_SKSHAPER_FUNCTIONS)
++std::unique_ptr<SkShaper> SkShaper::Make(sk_sp<SkFontMgr> fallback) {
++#if defined(SK_SHAPER_HARFBUZZ_AVAILABLE) && defined(SK_SHAPER_UNICODE_AVAILABLE)
++    std::unique_ptr<SkShaper> shaper = MakeShapeThenWrap(std::move(fallback));
++    if (shaper) {
++        return shaper;
++    }
++#elif defined(SK_SHAPER_CORETEXT_AVAILABLE)
++    if (auto shaper = SkShapers::CT::CoreText()) {
++        return shaper;
++    }
++#endif
++    return SkShapers::Primitive::PrimitiveText();
++}
++
++void SkShaper::PurgeCaches() {
++#if defined(SK_SHAPER_HARFBUZZ_AVAILABLE) && defined(SK_SHAPER_UNICODE_AVAILABLE)
++    SkShapers::HB::PurgeCaches();
++#endif
++}
++
++std::unique_ptr<SkShaper::BiDiRunIterator>
++SkShaper::MakeBiDiRunIterator(const char* utf8, size_t utf8Bytes, uint8_t bidiLevel) {
++#if defined(SK_SHAPER_UNICODE_AVAILABLE)
++      std::unique_ptr<SkShaper::BiDiRunIterator> bidi = MakeIcuBiDiRunIterator(utf8, utf8Bytes, bidiLevel);
++      if (bidi) {
++          return bidi;
++      }
++#endif
++    return std::make_unique<SkShaper::TrivialBiDiRunIterator>(bidiLevel, utf8Bytes);
++}
++
++std::unique_ptr<SkShaper::ScriptRunIterator>
++SkShaper::MakeScriptRunIterator(const char* utf8, size_t utf8Bytes, SkFourByteTag scriptTag) {
++#if defined(SK_SHAPER_HARFBUZZ_AVAILABLE) && defined(SK_SHAPER_UNICODE_AVAILABLE)
++    std::unique_ptr<SkShaper::ScriptRunIterator> script =
++            SkShapers::HB::ScriptRunIterator(utf8, utf8Bytes, scriptTag);
++    if (script) {
++        return script;
++    }
++#endif
++    return std::make_unique<SkShaper::TrivialScriptRunIterator>(scriptTag, utf8Bytes);
++}
++#endif  // !defined(SK_DISABLE_LEGACY_SKSHAPER_FUNCTIONS)

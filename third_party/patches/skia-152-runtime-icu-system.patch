@@ -1,0 +1,192 @@
+Lets the runtime ICU loader of SkUnicode use the ICU a platform gives apps.
+
+Skia's runtime loader dlopens libicuuc.so and looks only for versioned names
+(u_errorName_74). Neither works for an app:
+  - Android: libicuuc.so is not an NDK library, so an app cannot dlopen it.
+    The NDK library is libicu.so (API 31, Android 12), with unversioned names.
+  - Windows: there is no runtime loader at all (BUILD.gn allows it only on
+    Android and Linux). Windows 10 1903+ ships icu.dll, 1703-1809 icuuc.dll,
+    both with unversioned names.
+
+With this patch the loader tries libicu.so then libicuuc.so (icu.dll then
+icuuc.dll on Windows), and for each name tries the unversioned symbol before
+the versioned ones. The first symbol found pins the form, as before. A library
+that lacks a required symbol is closed and the next one is tried. If none
+works SkUnicodes::ICU::Make() returns nullptr, as it did before.
+
+No ICU data ships with the package: the platform's ICU brings its own.
+
+diff --git a/modules/skunicode/BUILD.gn b/modules/skunicode/BUILD.gn
+index b6ad521..70a8c67 100644
+--- a/modules/skunicode/BUILD.gn
++++ b/modules/skunicode/BUILD.gn
+@@ -75,8 +75,8 @@ if (skia_use_icu || skia_use_client_icu || skia_use_libgrapheme ||
+       sources += skia_unicode_bidi_full_sources
+       sources += skia_unicode_icu_sources
+ 
+-      # only available for Android at the moment
+-      if (skia_use_runtime_icu && (is_android || is_linux)) {
++      # skia-prep: Windows loads the system icu.dll the same way.
++      if (skia_use_runtime_icu && (is_android || is_linux || is_win)) {
+         sources += skia_unicode_runtime_icu_sources
+         defines += [ "SK_UNICODE_RUNTIME_ICU_AVAILABLE" ]
+         deps += [ "//third_party/icu:headers" ]
+diff --git a/modules/skunicode/src/SkUnicode_icu_runtime.cpp b/modules/skunicode/src/SkUnicode_icu_runtime.cpp
+index a76b056..b35cd9c 100644
+--- a/modules/skunicode/src/SkUnicode_icu_runtime.cpp
++++ b/modules/skunicode/src/SkUnicode_icu_runtime.cpp
+@@ -9,50 +9,71 @@
+ #include "include/core/SkTypes.h"
+ #include "modules/skunicode/src/SkUnicode_icupriv.h"
+ 
++#if defined(SK_BUILD_FOR_WIN)
++#include "src/core/SkLeanWindows.h"
++#else
+ #include <dlfcn.h>
+-
+-#define SK_RUNTIME_ICU_PATHS "libicuuc.so"
+-
+-std::unique_ptr<SkICULib> SkLoadICULib() {
+-    static constexpr char const* gLibPaths[] = { SK_RUNTIME_ICU_PATHS };
+-
+-    void* dlhnd = nullptr;
+-    for (const auto path : gLibPaths) {
+-        dlhnd = dlopen(path, RTLD_LAZY);
+-        if (dlhnd) {
+-            break;
+-        }
+-    }
+-
+-    if (!dlhnd) {
+-        SkDEBUGF("ICU loader: failed to open libicuuc.\n");
+-        return nullptr;
+-    }
+-
++#endif
++
++// skia-prep: also open the ICU that a platform offers to applications.
++//
++//   Android 12+ (API 31) : libicu.so, the NDK's ICU4C. Its names are unversioned.
++//                          Apps cannot dlopen libicuuc.so (not an NDK library).
++//   Windows 10 1903+     : icu.dll. Windows 10 1703-1809: icuuc.dll. Unversioned.
++//   Linux                : libicuuc.so with versioned names (u_errorName_74).
++//
++// A library that opens but lacks a required symbol is closed and the next path
++// is tried. If none works, SkUnicodes::ICU::Make() returns nullptr and callers
++// fall back as before.
++namespace {
++
++#if defined(SK_BUILD_FOR_WIN)
++using LibHandle = HMODULE;
++constexpr const char* kLibPaths[] = { "icu.dll", "icuuc.dll" };
++
++LibHandle open_lib(const char path[]) {
++    return LoadLibraryExA(path, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
++}
++void* find_sym(LibHandle handle, const char name[]) {
++    return reinterpret_cast<void*>(GetProcAddress(handle, name));
++}
++void close_lib(LibHandle handle) { FreeLibrary(handle); }
++#else
++using LibHandle = void*;
++constexpr const char* kLibPaths[] = { "libicu.so", "libicuuc.so" };
++
++LibHandle open_lib(const char path[]) { return dlopen(path, RTLD_LAZY); }
++void* find_sym(LibHandle handle, const char name[]) { return dlsym(handle, name); }
++void close_lib(LibHandle handle) { dlclose(handle); }
++#endif
++
++std::unique_ptr<SkICULib> load_from(LibHandle handle) {
++    // -1: not known yet, 0: unversioned names, otherwise the ICU major version.
+     int icu_ver = -1;
+-
+     bool resolved_required_syms = true;
+ 
+-    auto resolve_sym = [&](void* hnd, const char name[], bool required = false) -> void* {
++    auto resolve_sym = [&](const char name[], bool required = false) -> void* {
+         static constexpr int kMinVer =  44,
+                              kMaxVer = 100;
+ 
+-        // First call performs a search to determine the actual lib version.
+-        // Subsequent calls are pinned to the version found.
+-        const auto search_to = icu_ver > 0 ? icu_ver : kMaxVer;
+-        icu_ver              = icu_ver > 0 ? icu_ver : kMinVer;
+-
+-        for (;;) {
+-            const auto sym = SkStringPrintf("%s_%d", name, icu_ver);
+-            if (auto* addr = dlsym(dlhnd, sym.c_str())) {
++        // The first symbol found decides between unversioned and versioned
++        // names, and pins the version; later lookups use only that form.
++        if (icu_ver <= 0) {
++            if (void* addr = find_sym(handle, name)) {
++                icu_ver = 0;
+                 return addr;
+             }
+-
+-            if (icu_ver == search_to) {
+-                break;
++        }
++        if (icu_ver != 0) {
++            const int from = icu_ver > 0 ? icu_ver : kMinVer;
++            const int to   = icu_ver > 0 ? icu_ver : kMaxVer;
++            for (int ver = from; ver <= to; ++ver) {
++                const auto sym = SkStringPrintf("%s_%d", name, ver);
++                if (void* addr = find_sym(handle, sym.c_str())) {
++                    icu_ver = ver;
++                    return addr;
++                }
+             }
+-
+-            icu_ver++;
+         }
+ 
+         if (required) {
+@@ -63,24 +84,36 @@ std::unique_ptr<SkICULib> SkLoadICULib() {
+ 
+     SkICULib lib {};
+ 
+-    // When using dlsym
+-    // *(void**)(&procPtr) = dlsym(self, "proc");
+-    // is non-standard, but safe for POSIX. Cannot write
+-    // *reinterpret_cast<void**>(&procPtr) = dlsym(self, "proc");
+-    // because clang has not implemented DR573. See http://clang.llvm.org/cxx_dr_status.html .
+-    #define SKICU_FUNC(fname) *(void**)(&lib.f_##fname) = resolve_sym(dlhnd, #fname, true);
++    // *(void**)(&procPtr) = dlsym(self, "proc"); is non-standard, but safe for
++    // POSIX and Win32. See the original comment in Skia's version of this file.
++    #define SKICU_FUNC(fname) *(void**)(&lib.f_##fname) = resolve_sym(#fname, true);
+     SKICU_EMIT_FUNCS
+ 
+-    *(void**)(&lib.f_ubrk_clone_)     = resolve_sym(dlhnd, "ubrk_clone");
+-    *(void**)(&lib.f_ubrk_safeClone_) = resolve_sym(dlhnd, "ubrk_safeClone");
+-    *(void**)(&lib.f_ubrk_getLocaleByType) = resolve_sym(dlhnd, "ubrk_getLocaleByType");
++    *(void**)(&lib.f_ubrk_clone_)     = resolve_sym("ubrk_clone");
++    *(void**)(&lib.f_ubrk_safeClone_) = resolve_sym("ubrk_safeClone");
++    *(void**)(&lib.f_ubrk_getLocaleByType) = resolve_sym("ubrk_getLocaleByType");
+ 
+     if (!resolved_required_syms || (!lib.f_ubrk_clone_ && !lib.f_ubrk_safeClone_)) {
+-        SkDEBUGF("ICU loader: failed to resolve required symbols.");
+-        dlclose(dlhnd);
+         return nullptr;
+     }
+-
+     return std::make_unique<SkICULib>(lib);
+ }
+ 
++}  // namespace
++
++std::unique_ptr<SkICULib> SkLoadICULib() {
++    for (const char* path : kLibPaths) {
++        LibHandle handle = open_lib(path);
++        if (!handle) {
++            continue;
++        }
++        if (auto lib = load_from(handle)) {
++            // The handle stays open for the life of the process, as before.
++            return lib;
++        }
++        SkDEBUGF("ICU loader: %s lacks a required symbol.\n", path);
++        close_lib(handle);
++    }
++    SkDEBUGF("ICU loader: no usable system ICU was found.\n");
++    return nullptr;
++}

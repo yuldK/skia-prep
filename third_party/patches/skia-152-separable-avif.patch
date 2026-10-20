@@ -1,0 +1,57 @@
+Builds the AVIF decoder (libavif + libgav1 + libyuv) as an archive of its own.
+
+optional("avif") puts SkAvifCodec into :skia and defines SK_CODEC_DECODES_AVIF
+for it, so SkCodec.cpp adds AVIF to the default decoder list and every consumer
+of skia.lib / libskia.a has to link the three AVIF libraries. With this patch
+skia_use_libavif stays false and skia_prep_avif_archive = true builds
+`avif_decoder` beside :skia. The consumer registers it:
+
+    SkCodecs::Register(SkAvifDecoder::LibAvif::Decoder());
+
+include/codec/SkAvifDecoder.h already declares LibAvif::Decoder() without any
+guard, so no define is needed on the consumer side.
+
+Checked on Skia 152 (0873ec164a) for win-x64 (clang-cl) and android-arm64
+(NDK r27d): a consumer that links only the old archive list still links, and
+one that adds avif_decoder + libavif + libgav1 + libyuv decodes AVIF.
+
+diff --git a/BUILD.gn b/BUILD.gn
+index df31ad6..bd94691 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1094,6 +1094,35 @@ optional("crabbyavif") {
+   sources = [ "src/codec/SkCrabbyAvifCodec.cpp" ]
+ }
+ 
++# skia-prep: AVIF decoding as an archive of its own.
++#
++# optional("avif") compiles SkAvifCodec into :skia and gives :skia the public
++# define SK_CODEC_DECODES_AVIF, which makes src/codec/SkCodec.cpp put the AVIF
++# decoder into the default decoder list. Every consumer of :skia would then
++# have to link libavif, libgav1 and libyuv whether it reads AVIF or not.
++# This builds the same source into a separate archive and leaves :skia as it
++# is. A consumer that wants AVIF registers the decoder itself:
++#   SkCodecs::Register(SkAvifDecoder::LibAvif::Decoder());
++# or passes it in the decoder list of SkCodec::MakeFromStream.
++declare_args() {
++  skia_prep_avif_archive = false
++}
++
++if (skia_prep_avif_archive) {
++  assert(!skia_use_libavif,
++         "skia_prep_avif_archive replaces skia_use_libavif; enable only one")
++
++  skia_static_library("avif_decoder") {
++    check_includes = false
++    configs = skia_library_configs
++    sources = [ "src/codec/SkAvifCodec.cpp" ]
++    deps = [
++      ":skia",
++      "//third_party/libavif",
++    ]
++  }
++}
++
+ optional("jpeg_mpf") {
+   enabled = skia_use_jpeg_gainmaps &&
+             (skia_use_libjpeg_turbo_encode || skia_use_libjpeg_turbo_decode)

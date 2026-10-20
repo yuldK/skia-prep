@@ -46,11 +46,28 @@ skia_use_fontconfig = false
 skia_use_system_libpng = false
 skia_use_system_zlib = false
 
-skia_use_harfbuzz = false
-skia_use_icu = false
+# 텍스트 모양 잡기다. HarfBuzz, skunicode(ICU), skshaper, skparagraph가 각각
+# 따로 된 정적 라이브러리로 나온다. 쓰지 않는 소비자는 링크하지 않는다
+# (docs/skia-build.md 6).
+#
+# ICU는 **실행 시점에 플랫폼의 것을 연다** (skia_use_runtime_icu). ICU를
+# 컴파일하지도, 수십 MB의 icudtl.dat를 싣지도 않는다 — ICU external은 헤더로만
+# 쓴다. 여는 것은 Android 12(API 31)부터 NDK 라이브러리인 libicu.so
+# (ndk_api 26과 무관하게 dlopen한다. 그 아래 판에서는 SkUnicodes::ICU::Make가
+# nullptr을 돌려주고 소비자가 primitive로 물러선다)다.
+# Skia의 로더는 그 이름을 몰라 skia-152-runtime-icu-system.patch가 가르친다.
+# system_* 은 기본값이 is_official_build라 Release에서 저절로 켜지므로 끈다.
+skia_use_harfbuzz = true
+skia_use_system_harfbuzz = false
+skia_use_icu = true
+skia_use_system_icu = false
+skia_use_runtime_icu = true
 skia_use_icu4x = false
 skia_use_libgrapheme = false
 skia_use_client_icu = false
+# 기본값이 skia_use_harfbuzz다. PDF를 끄므로 지금은 뜻이 없지만, 켜 두면
+# PDF를 켜는 날 harfbuzz가 skia.lib 안으로 들어간다.
+skia_pdf_subset_harfbuzz = false
 
 # 코덱이다. png만 여기 없다 — png-libpng.gn·png-rust.gn 중 하나를 이 파일 뒤에
 # 이어 붙여 정한다. system_* 을 명시하는 이유는 Windows 갈래와 같다 —
@@ -68,14 +85,27 @@ skia_use_dng_sdk = false
 skia_use_piex = false
 skia_use_lua = false
 skia_use_jpeg_gainmaps = false
+# AVIF 디코더다 (libavif + libgav1 + libyuv). skia_use_libavif는 SkCodec의 기본
+# 디코더 목록에 AVIF를 넣어 **모든 소비자가 세 라이브러리를 링크하게 만든다.**
+# 그래서 끄고, skia-152-separable-avif.patch의 인자로 avif_decoder를 skia 밖에
+# 따로 세운다. 쓰는 소비자가 SkCodecs::Register(SkAvifDecoder::LibAvif::Decoder())로
+# 등록한다. CrabbyAvif는 Skia가 Android 프레임워크 빌드에서만 연다.
+skia_use_libavif = false
+skia_use_crabbyavif = false
+skia_prep_avif_archive = true
 # 기본값이 is_android && ndk_api >= 30이다. ndk_api를 올리면 저절로 켜져
 # png·jpeg 디코드가 플랫폼 코덱(AImageDecoder)으로 바뀐다. 코덱을 갈래와
 # 무관하게 같게 두려고 끈다.
 skia_use_ndk_images = false
 
 skia_enable_pdf = false
-skia_enable_svg = false
-skia_enable_skottie = false
+# SVG와 Skottie다. 모듈마다 따로 된 정적 라이브러리로 나온다 — svg, skottie·sksg·
+# jsonreader, 그리고 둘이 함께 쓰는 skshaper·skresources. 글자는 기본이 primitive
+# shaper이고, 소비자가 HarfBuzz 공장을 넘기면 위의 모양 잡기 길로 간다.
+skia_enable_svg = true
+skia_enable_skottie = true
+skia_enable_skshaper = true
+skia_enable_skparagraph = true
 skia_enable_graphite = false
 skia_enable_tools = false
 skia_enable_android_utils = false

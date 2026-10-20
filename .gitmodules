@@ -46,3 +46,12 @@
 [submodule "third_party/skia-externals/expat"]
 	path = third_party/skia-externals/expat
 	url = https://github.com/libexpat/libexpat.git
+[submodule "third_party/skia-externals/libavif"]
+	path = third_party/skia-externals/libavif
+	url = https://github.com/AOMediaCodec/libavif.git
+[submodule "third_party/skia-externals/libgav1"]
+	path = third_party/skia-externals/libgav1
+	url = https://chromium.googlesource.com/codecs/libgav1.git
+[submodule "third_party/skia-externals/libyuv"]
+	path = third_party/skia-externals/libyuv
+	url = https://chromium.googlesource.com/libyuv/libyuv.git

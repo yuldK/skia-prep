@@ -684,8 +684,17 @@ if ($argument_text -match 'skia_use_libgrapheme\s*=\s*true') {
     # 데이터 파일은 쓰지 않는다.
     $required_externals.Add('icu')
 }
+# 이 저장소의 ICU 갈래는 runtime이라 icu external은 **헤더로만** 쓴다
+# (skunicode가 //third_party/icu:headers를 본다). 데이터도 소스도 컴파일하지 않는다.
 if ($argument_text -match 'skia_use_icu\s*=\s*true') {
     $required_externals.Add('icu')
+}
+# skia-152-separable-avif.patch의 인자다. libavif가 libgav1(AV1 디코더)과 libyuv
+# (YUV -> RGB)를 끌어온다 (third_party/libavif/BUILD.gn).
+if ($argument_text -match 'skia_prep_avif_archive\s*=\s*true') {
+    $required_externals.Add('libavif')
+    $required_externals.Add('libgav1')
+    $required_externals.Add('libyuv')
 }
 
 # python을 먼저 정한다.
@@ -829,18 +838,31 @@ Run: git submodule update --init third_party/skia-externals/$name
 }
 
 # 2. 패치.
-#    **기본 구성에는 패치가 없다.** Skia 152는 손대지 않고 그대로 선다 —
-#    148이 요구하던 Direct3D `operator==` 패치는 152에서 필요 없어졌다
-#    (`GrD3DBackendSurface.cpp`가 더 이상 가드 밖에서 부르지 않는다. Debug로 실측).
-#    rust png 구성만 둘이 필요하고, **대상마다 다른 둘이다.** 서로 섞지 않는다 —
+#    모듈 패치 셋은 **대상과 png 갈래에 무관하게 언제나** 건다. 기능을 기존
+#    아카이브와 떼어 놓는 것이 셋의 목적이다 (docs/skia-build.md 6).
+#      separable-avif        : AVIF 디코더를 skia 밖의 avif_decoder로 세운다.
+#                              skia_use_libavif는 SkCodec의 기본 목록에 AVIF를 넣는다.
+#      skshaper-legacy-split : HarfBuzz·SkUnicode를 부르는 옛 SkShaper 함수를 다른
+#                              오브젝트로 옮긴다. SVG만 쓰는 소비자가 그 둘 없이 링크된다.
+#      runtime-icu-system    : runtime ICU가 Android의 libicu.so와 Windows의 icu.dll을 연다.
+#      module-archives       : 모듈 아카이브가 자기 오브젝트만 담는다. 그러지 않으면
+#                              skshaper가 HarfBuzz를, svg·skottie가 skia의 core를 복사해 든다.
+#    rust png 구성은 둘이 더 필요하고, **대상마다 다른 둘이다.** 서로 섞지 않는다 —
 #    Windows의 산출물 이름 패치를 Linux에 걸면 GN의 복사 단계가 없는 .lib을 찾는다.
 #      win-x64       : Windows bazel 산출물 이름을 고치고, Debug bazel C++
 #                      산출물을 /MTd ABI로 맞춘다 (docs/skia-build.md 5.3).
 #      android-arm64 : Rust·crate 목록에 aarch64-linux-android를 더하고(lock째
 #                      고정한다), GN이 Bazel에 Android 플랫폼을 넘긴다
 #                      (docs/skia-build.md 8).
+#    148이 요구하던 Direct3D `operator==` 패치는 152에서 필요 없어졌다
+#    (`GrD3DBackendSurface.cpp`가 더 이상 가드 밖에서 부르지 않는다. Debug로 실측).
+$patch_set = @(
+    @('skia-152-separable-avif.patch', 'separable avif'),
+    @('skia-152-skshaper-legacy-split.patch', 'skshaper legacy split'),
+    @('skia-152-runtime-icu-system.patch', 'runtime icu system'),
+    @('skia-152-module-archives.patch', 'module archives'))
 if ($RustPng) {
-    $patch_set = if ($is_android) {
+    $patch_set += if ($is_android) {
         @(@('skia-152-bazel-rust-android-triples.patch', 'rust android triples'),
             @('skia-152-bazel-rust-android-platform.patch', 'rust android platform'))
     }
@@ -848,6 +870,8 @@ if ($RustPng) {
         @(@('skia-152-bazel-rust-windows-outputs.patch', 'rust png outputs'),
             @('skia-152-bazel-rust-windows-debug-crt.patch', 'rust png debug CRT'))
     }
+}
+if ($patch_set) {
     $patches = @($patch_set | ForEach-Object {
             @{
                 path  = Join-Path $repository_root (Join-Path 'third_party\patches' $_[0])
@@ -856,17 +880,16 @@ if ($RustPng) {
         })
     foreach ($patch in $patches) {
         if (-not (Test-Path -LiteralPath $patch.path -PathType Leaf)) {
-            throw "The rust png patch was not found: $($patch.path)"
+            throw "The Skia patch was not found: $($patch.path)"
         }
     }
 
     & git -C $skia_root rev-parse --is-inside-work-tree 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw @"
--RustPng needs a patch in the Skia tree, and $skia_root is not a git work tree,
-so this script cannot manage it. Apply it by hand from a checkout of that tree:
-  git apply $($patches[0].path)
-  git apply $($patches[1].path)
+This build needs patches in the Skia tree, and $skia_root is not a git work tree,
+so this script cannot manage them. Apply them by hand from a checkout of that tree:
+  $(($patches | ForEach-Object { 'git apply ' + $_.path }) -join "`n  ")
 "@
     }
 
@@ -884,9 +907,6 @@ so this script cannot manage it. Apply it by hand from a checkout of that tree:
             Write-Output "patch          : applied ($($patch.label))"
         }
     }
-}
-else {
-    Write-Output 'patch          : none needed'
 }
 
 # 3. gn gen.
@@ -911,11 +931,26 @@ try {
     }
 
     # 4. ninja.
-    #    텍스트 처리 구성은 module 라이브러리도 함께 만든다.
+    #    기능마다 따로 된 아카이브를 낸다 — 쓰지 않는 소비자가 링크하지 않게 하는
+    #    것이 그 이유다 (docs/skia-build.md 6). Skia의 group("modules")는 쓰지 않는다.
+    #    bentleyottmann처럼 패키지에 싣지 않는 모듈까지 세우기 때문이다. 대상 이름은
+    #    GN 라벨 그대로다. 의존하는 아카이브(skshaper·skresources·sksg·jsonreader·
+    #    harfbuzz·expat·libavif …)는 ninja가 따라 세운다.
     $targets = @('skia')
-    if ($argument_text -match 'skia_use_harfbuzz\s*=\s*true') {
-        $targets += 'modules'
+    $module_targets = [ordered]@{
+        'skia_enable_svg'         = 'modules/svg:svg'
+        'skia_enable_skottie'     = 'modules/skottie:skottie'
+        'skia_enable_skparagraph' = 'modules/skparagraph:skparagraph'
+        'skia_use_icu'            = 'modules/skunicode:skunicode'
+        'skia_use_harfbuzz'       = 'modules/skshaper:skshaper'
+        'skia_prep_avif_archive'  = 'avif_decoder'
     }
+    foreach ($argument in $module_targets.Keys) {
+        if ($argument_text -match ('{0}\s*=\s*true' -f $argument)) {
+            $targets += $module_targets[$argument]
+        }
+    }
+    Write-Output "ninja targets  : $($targets -join ' ')"
     & $ninja -C $output_directory @targets
     if ($LASTEXITCODE -ne 0) {
         throw 'ninja failed.'

@@ -1,0 +1,101 @@
+{
+    "schema": 1,
+    "comment": "기능별 아카이브 목록이다. pack_skia.ps1이 이것으로 NOTICE.json을 만들고 패키지에 싣는다. scripts/probe_features.ps1이 기능마다 이 목록만 더해 링크한다. 순서가 Android의 링크 순서다 (docs/skia-build.md 6.2).",
+    "features": {
+        "core": {
+            "description": "Skia 본체. 래스터, GPU(Windows Direct3D, Android Vulkan), png(rust)·jpeg·webp·gif 디코드와 png(rust)·jpeg·webp 인코드. r2/r1과 같은 목록이다.",
+            "requires": [],
+            "libraries": {
+                "win-x64": [
+                    "skia.lib", "skcms.lib", "spirv_cross.lib", "d3d12allocator.lib",
+                    "libjpeg.lib", "libjpeg12.lib", "libjpeg16.lib",
+                    "libwebp.lib", "libwebp_sse41.lib", "wuffs.lib",
+                    "librust_png_ffi_rs.a", "libcxx_cc.a"
+                ],
+                "android-arm64": [
+                    "libskia.a", "libskcms.a",
+                    "libjpeg.a", "libjpeg12.a", "libjpeg16.a",
+                    "libwebp.a", "libwebp_sse41.a", "libwuffs.a",
+                    "libfreetype2.a", "libexpat.a", "libpng.a", "libzlib.a", "libcpu-features.a",
+                    "librust_png_ffi_rs.a", "libcxx_cc.a"
+                ]
+            },
+            "system_libraries": {
+                "win-x64": [
+                    "ole32", "oleaut32", "user32", "usp10", "fontsub", "gdi32",
+                    "d3d12", "dxgi", "d3dcompiler", "ws2_32", "userenv", "ntdll"
+                ],
+                "android-arm64": [ "android", "log" ]
+            },
+            "notices": {
+                "win-x64": [
+                    "skia", "skcms", "spirv-cross", "spirv-headers", "d3d12allocator",
+                    "libjpeg-turbo", "libwebp", "wuffs", "rust"
+                ],
+                "android-arm64": [
+                    "skia", "skcms", "vulkanmemoryallocator", "freetype", "expat",
+                    "libjpeg-turbo", "libwebp", "wuffs", "libpng", "zlib", "cpu-features", "rust"
+                ]
+            }
+        },
+        "svg": {
+            "description": "SkSVGDOM. 글자는 기본이 primitive shaper이고 text 기능의 공장을 넘기면 HarfBuzz로 모양 잡는다.",
+            "requires": [ "core" ],
+            "libraries": {
+                "win-x64": [ "svg.lib", "skshaper.lib", "skresources.lib" ],
+                "android-arm64": [ "libsvg.a", "libskshaper.a", "libskresources.a" ]
+            },
+            "system_libraries": { "win-x64": [], "android-arm64": [] },
+            "notices": {
+                "win-x64": [ "expat" ],
+                "android-arm64": []
+            }
+        },
+        "text": {
+            "description": "HarfBuzz 모양 잡기(SkShapers::HB), SkUnicode(실행 시점에 여는 시스템 ICU), SkParagraph.",
+            "requires": [ "core" ],
+            "libraries": {
+                "win-x64": [
+                    "skparagraph.lib", "skshaper.lib", "skunicode_icu.lib", "skunicode_core.lib",
+                    "harfbuzz.lib"
+                ],
+                "android-arm64": [
+                    "libskparagraph.a", "libskshaper.a", "libskunicode_icu.a", "libskunicode_core.a",
+                    "libharfbuzz.a"
+                ]
+            },
+            "system_libraries": { "win-x64": [], "android-arm64": [] },
+            "notices": {
+                "win-x64": [ "harfbuzz", "icu" ],
+                "android-arm64": [ "harfbuzz", "icu" ]
+            }
+        },
+        "skottie": {
+            "description": "Lottie 재생. 글자 레이어는 기본이 primitive shaper이고 text 기능의 공장을 넘기면 HarfBuzz로 모양 잡는다.",
+            "requires": [ "core" ],
+            "libraries": {
+                "win-x64": [
+                    "skottie.lib", "sksg.lib", "jsonreader.lib", "skresources.lib", "skshaper.lib"
+                ],
+                "android-arm64": [
+                    "libskottie.a", "libsksg.a", "libjsonreader.a", "libskresources.a", "libskshaper.a"
+                ]
+            },
+            "system_libraries": { "win-x64": [], "android-arm64": [] },
+            "notices": { "win-x64": [], "android-arm64": [] }
+        },
+        "avif": {
+            "description": "AVIF 디코드(libavif + libgav1 + libyuv). 기본 디코더 목록에 없다. SkCodecs::Register(SkAvifDecoder::LibAvif::Decoder())로 등록하거나 디코더 목록에 직접 넘긴다.",
+            "requires": [ "core" ],
+            "libraries": {
+                "win-x64": [ "avif_decoder.lib", "libavif.lib", "libgav1.lib", "libyuv.lib" ],
+                "android-arm64": [ "libavif_decoder.a", "libavif.a", "libgav1.a", "libyuv.a" ]
+            },
+            "system_libraries": { "win-x64": [], "android-arm64": [] },
+            "notices": {
+                "win-x64": [ "libavif", "libgav1", "libyuv" ],
+                "android-arm64": [ "libavif", "libgav1", "libyuv" ]
+            }
+        }
+    }
+}
