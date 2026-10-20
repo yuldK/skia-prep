@@ -11,15 +11,15 @@ skia_use_libavif stays false and skia_prep_avif_archive = true builds
 include/codec/SkAvifDecoder.h already declares LibAvif::Decoder() without any
 guard, so no define is needed on the consumer side.
 
-Checked on Skia 152 (0873ec164a) for win-x64 (clang-cl) and android-arm64
-(NDK r27d): a consumer that links only the old archive list still links, and
+Checked on Skia 157 (b94213a11b, chrome/m157) for win-x64 (clang-cl) and
+android-arm64 (NDK r27d): a consumer that links only the old archive list still links, and
 one that adds avif_decoder + libavif + libgav1 + libyuv decodes AVIF.
 
 diff --git a/BUILD.gn b/BUILD.gn
-index df31ad6..bd94691 100644
+index b1e29de..4c6556b 100644
 --- a/BUILD.gn
 +++ b/BUILD.gn
-@@ -1094,6 +1094,35 @@ optional("crabbyavif") {
+@@ -1103,6 +1103,35 @@ optional("crabbyavif") {
    sources = [ "src/codec/SkCrabbyAvifCodec.cpp" ]
  }
  

@@ -89,6 +89,11 @@ skia_use_libavif = false
 skia_use_crabbyavif = false
 skia_prep_avif_archive = true
 
+# Skia 157의 루트 .gn이 기본 인자로 켠다. 켜지면 SK_ENABLE_YUVA_PACKED_422가 **공개
+# 정의**가 되어 SkYUVAInfo::PlaneConfig 열거형에 kYUYV가 더해진다. 정의를 주지 않는
+# 소비자(luil)와 헤더가 어긋나므로 152와 같게 끈다. 쓰지 않는 기능이다.
+skia_enable_packed_422_yuv = false
+
 skia_enable_pdf = false
 # SVG와 Skottie다. 모듈마다 따로 된 정적 라이브러리로 나온다 — svg, skottie·sksg·
 # jsonreader, 그리고 둘이 함께 쓰는 skshaper·skresources. 글자는 기본이 primitive

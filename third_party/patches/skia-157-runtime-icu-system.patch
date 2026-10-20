@@ -17,10 +17,10 @@ works SkUnicodes::ICU::Make() returns nullptr, as it did before.
 No ICU data ships with the package: the platform's ICU brings its own.
 
 diff --git a/modules/skunicode/BUILD.gn b/modules/skunicode/BUILD.gn
-index b6ad521..70a8c67 100644
+index 138d318..2b30923 100644
 --- a/modules/skunicode/BUILD.gn
 +++ b/modules/skunicode/BUILD.gn
-@@ -75,8 +75,8 @@ if (skia_use_icu || skia_use_client_icu || skia_use_libgrapheme ||
+@@ -78,8 +78,8 @@ if (skia_use_icu || skia_use_client_icu || skia_use_libgrapheme ||
        sources += skia_unicode_bidi_full_sources
        sources += skia_unicode_icu_sources
  

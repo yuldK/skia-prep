@@ -149,9 +149,12 @@ $module_header_files = @('modules/skshaper/utils/FactoryHelpers.h')
 #               그리고 기능별 아카이브(SVG·텍스트·Skottie·AVIF)가 더해졌다.
 #               r3은 이 둘을 함께 실은 첫 발행이다.
 #   android-arm64 r2  기능별 아카이브(SVG·텍스트·Skottie·AVIF)가 더해졌다.
+#
+# 여기까지가 Skia 152(0873ec164a)의 판번이다. 157(b94213a11b, chrome/m157)로 옮기며
+# 두 대상 모두 1로 되돌렸다.
 $package_revisions = @{
-    'win-x64'       = 3
-    'android-arm64' = 2
+    'win-x64'       = 1
+    'android-arm64' = 1
 }
 $package_revision = $package_revisions[$Target]
 
@@ -1038,16 +1041,17 @@ if (Test-Path -LiteralPath $milestone_file -PathType Leaf) {
 }
 # build_skia.ps1이 거는 것과 같은 목록이다. 모듈 패치 넷은 언제나, rust 패치 둘은
 # 대상마다 다른 것을 건다.
-$patches = @('skia-152-separable-avif.patch', 'skia-152-skshaper-legacy-split.patch',
-    'skia-152-runtime-icu-system.patch', 'skia-152-module-archives.patch')
+$patches = @('skia-157-separable-avif.patch', 'skia-157-skshaper-legacy-split.patch',
+    'skia-157-runtime-icu-system.patch', 'skia-157-module-archives.patch')
 if ($png_codec -eq 'rust') {
     $patches += if ($is_android) {
-        @('skia-152-bazel-rust-android-triples.patch',
-            'skia-152-bazel-rust-android-platform.patch')
+        @('skia-157-bazel-rust-android-ndk.patch',
+            'skia-157-bazel-rust-android-triples.patch',
+            'skia-157-bazel-rust-android-platform.patch')
     }
     else {
-        @('skia-152-bazel-rust-windows-outputs.patch',
-            'skia-152-bazel-rust-windows-debug-crt.patch')
+        @('skia-157-bazel-rust-windows-outputs.patch',
+            'skia-157-bazel-rust-windows-debug-crt.patch')
     }
 }
 

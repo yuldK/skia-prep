@@ -52,8 +52,8 @@ $components += @($feature_map.features.PSObject.Properties |
         ForEach-Object { $_.Value.libraries.$Target } |
         Select-Object -Unique)
 # 이 저장소가 고정한 Skia의 밀번이다 (docs/skia-build.md 7).
-# rust png 갈래는 152 아래에서 아예 서지 않는다 (5.3).
-$minimum_milestone = 152
+# rust png 갈래는 152 아래에서 아예 서지 않는다 (5.3). 패치는 157에 맞춰 떴다.
+$minimum_milestone = 157
 # win-x64는 luil CMakeLists.txt의 LUIL_SKIA_REQUIRED_ARGUMENTS와 같은 목록이다.
 # android-arm64는 luil에 아직 짝이 없다 — 이 저장소의 Android args가 켜는 것을
 # 그대로 요구한다 (docs/skia-build.md 8).
@@ -84,7 +84,8 @@ $forbidden_arguments = @(
     @{ name = 'is_trivial_abi'; reason = 'would change the ABI seen by MSVC consumers' },
     @{ name = 'skia_use_partition_alloc'; reason = 'defaults to is_clang; pulls in a new external' },
     @{ name = 'skia_use_libavif'; reason = 'puts AVIF in the default decoder list of skia itself' },
-    @{ name = 'skia_use_system_icu'; reason = 'the package loads the platform ICU at run time instead' })
+    @{ name = 'skia_use_system_icu'; reason = 'the package loads the platform ICU at run time instead' },
+    @{ name = 'skia_enable_packed_422_yuv'; reason = 'Skia 157 .gn turns it on; it adds a public define that changes SkYUVAInfo' })
 $failures = [System.Collections.Generic.List[string]]::new()
 
 # clang-cl이 낸 object인지 정적으로 판정한다.
@@ -318,7 +319,7 @@ foreach ($configuration in $Configurations) {
 
     # Android에서 아카이브에 물을 것은 CPU다. libskia.a는 GN이 NDK로 세우므로
     # 언제나 맞는다. 어긋나는 것은 rust 아카이브다 — GN이 Bazel에 Android
-    # 플랫폼을 넘기지 않으면(skia-152-bazel-rust-android-platform.patch가 빠지면)
+    # 플랫폼을 넘기지 않으면(skia-157-bazel-rust-android-platform.patch가 빠지면)
     # 그것만 조용히 호스트(x86_64)용으로 서고, 링크 단계에서야 드러난다.
     if ($is_android) {
         $elf_archives = @('libskia.a')

@@ -1,0 +1,436 @@
+Builds the rust codec for Android with the NDK the rest of Skia uses (r27).
+
+Skia's Bazel Android toolchain downloads NDK r21e. Skia 157's core, which
+//rust/png:ffi_rs pulls in through //rust/common:ffi_utils, now uses C++20
+library features that r21e's libc++ (LLVM 9) lacks: 36 files of src/core
+fail with "no template named 'to_array' in namespace 'std'". The GN build of
+the same sources uses NDK r27d and is fine.
+
+This points the Bazel toolchain at that same NDK instead of downloading one.
+scripts/build_skia.ps1 sets SKIA_PREP_ANDROID_NDK to the NDK root it passes to
+GN as `ndk`; a local repository rule symlinks it as @ndk_linux_amd64. The
+module extension is reproducible, so MODULE.bazel.lock records neither it nor
+the path. The toolchain files move to the r27 layout: sysroot and libc++ under
+toolchains/llvm/prebuilt/linux-x86_64/sysroot, no GCC toolchain (clang
+--target=<triple><api>), binutils trampolines replaced by llvm-ar, ld.lld and
+friends, clang 18's resource directory. The API level is 26, the package's
+ndk_api (minSdk), instead of 29.
+
+One NDK per package also means one libc++: with r21e, the rust archive carried
+r21e's libc++ objects next to the consumer's r27d libc++.
+
+Checked on Skia 157 (b94213a11b, chrome/m157) under WSL2 Ubuntu 24.04, NDK r27d.
+
+diff --git a/toolchain/android_trampolines/aarch64-linux-android-ar.sh b/toolchain/android_trampolines/aarch64-linux-android-ar.sh
+index d99c409..34df993 100644
+--- a/toolchain/android_trampolines/aarch64-linux-android-ar.sh
++++ b/toolchain/android_trampolines/aarch64-linux-android-ar.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin/aarch64-linux-android-ar $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar $@
+diff --git a/toolchain/android_trampolines/aarch64-linux-android-dwp.sh b/toolchain/android_trampolines/aarch64-linux-android-dwp.sh
+index 09f626a..783e46a 100644
+--- a/toolchain/android_trampolines/aarch64-linux-android-dwp.sh
++++ b/toolchain/android_trampolines/aarch64-linux-android-dwp.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin/aarch64-linux-android-dwp $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-dwp $@
+diff --git a/toolchain/android_trampolines/aarch64-linux-android-ld.sh b/toolchain/android_trampolines/aarch64-linux-android-ld.sh
+index 110da40..4519218 100644
+--- a/toolchain/android_trampolines/aarch64-linux-android-ld.sh
++++ b/toolchain/android_trampolines/aarch64-linux-android-ld.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin/aarch64-linux-android-ld $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld $@
+diff --git a/toolchain/android_trampolines/aarch64-linux-android-nm.sh b/toolchain/android_trampolines/aarch64-linux-android-nm.sh
+index 991fe16..b7ad736 100644
+--- a/toolchain/android_trampolines/aarch64-linux-android-nm.sh
++++ b/toolchain/android_trampolines/aarch64-linux-android-nm.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin/aarch64-linux-android-nm $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm $@
+diff --git a/toolchain/android_trampolines/aarch64-linux-android-objcopy.sh b/toolchain/android_trampolines/aarch64-linux-android-objcopy.sh
+index 6a63b04..fe15c5c 100644
+--- a/toolchain/android_trampolines/aarch64-linux-android-objcopy.sh
++++ b/toolchain/android_trampolines/aarch64-linux-android-objcopy.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin/aarch64-linux-android-objcopy $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy $@
+diff --git a/toolchain/android_trampolines/aarch64-linux-android-objdump.sh b/toolchain/android_trampolines/aarch64-linux-android-objdump.sh
+index 8d07710..620f09b 100644
+--- a/toolchain/android_trampolines/aarch64-linux-android-objdump.sh
++++ b/toolchain/android_trampolines/aarch64-linux-android-objdump.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin/aarch64-linux-android-objdump $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump $@
+diff --git a/toolchain/android_trampolines/aarch64-linux-android-strip.sh b/toolchain/android_trampolines/aarch64-linux-android-strip.sh
+index 15c6275..57a3308 100644
+--- a/toolchain/android_trampolines/aarch64-linux-android-strip.sh
++++ b/toolchain/android_trampolines/aarch64-linux-android-strip.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin/aarch64-linux-android-strip $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip $@
+diff --git a/toolchain/android_trampolines/arm-linux-androideabi-ar.sh b/toolchain/android_trampolines/arm-linux-androideabi-ar.sh
+index 59185f3..34df993 100644
+--- a/toolchain/android_trampolines/arm-linux-androideabi-ar.sh
++++ b/toolchain/android_trampolines/arm-linux-androideabi-ar.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-ar $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar $@
+diff --git a/toolchain/android_trampolines/arm-linux-androideabi-dwp.sh b/toolchain/android_trampolines/arm-linux-androideabi-dwp.sh
+index b30b2c3..783e46a 100644
+--- a/toolchain/android_trampolines/arm-linux-androideabi-dwp.sh
++++ b/toolchain/android_trampolines/arm-linux-androideabi-dwp.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-dwp $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-dwp $@
+diff --git a/toolchain/android_trampolines/arm-linux-androideabi-ld.sh b/toolchain/android_trampolines/arm-linux-androideabi-ld.sh
+index f53cff0..4519218 100644
+--- a/toolchain/android_trampolines/arm-linux-androideabi-ld.sh
++++ b/toolchain/android_trampolines/arm-linux-androideabi-ld.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-ld $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld $@
+diff --git a/toolchain/android_trampolines/arm-linux-androideabi-nm.sh b/toolchain/android_trampolines/arm-linux-androideabi-nm.sh
+index e9f5527..b7ad736 100644
+--- a/toolchain/android_trampolines/arm-linux-androideabi-nm.sh
++++ b/toolchain/android_trampolines/arm-linux-androideabi-nm.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-nm $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm $@
+diff --git a/toolchain/android_trampolines/arm-linux-androideabi-objcopy.sh b/toolchain/android_trampolines/arm-linux-androideabi-objcopy.sh
+index 92c49bd..fe15c5c 100644
+--- a/toolchain/android_trampolines/arm-linux-androideabi-objcopy.sh
++++ b/toolchain/android_trampolines/arm-linux-androideabi-objcopy.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-objcopy $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy $@
+diff --git a/toolchain/android_trampolines/arm-linux-androideabi-objdump.sh b/toolchain/android_trampolines/arm-linux-androideabi-objdump.sh
+index d523b8d..620f09b 100644
+--- a/toolchain/android_trampolines/arm-linux-androideabi-objdump.sh
++++ b/toolchain/android_trampolines/arm-linux-androideabi-objdump.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-objdump $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump $@
+diff --git a/toolchain/android_trampolines/arm-linux-androideabi-strip.sh b/toolchain/android_trampolines/arm-linux-androideabi-strip.sh
+index a603ad3..57a3308 100644
+--- a/toolchain/android_trampolines/arm-linux-androideabi-strip.sh
++++ b/toolchain/android_trampolines/arm-linux-androideabi-strip.sh
+@@ -12,4 +12,4 @@ cd $( dirname $( dirname $BASE_DIR))
+ # Then, we can find the toolchain.
+ CLANG_DIR=external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64
+ 
+-$CLANG_DIR/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-strip $@
++$CLANG_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip $@
+diff --git a/toolchain/download_ndk_linux_amd64_toolchain.bzl b/toolchain/download_ndk_linux_amd64_toolchain.bzl
+index c9bd408..d262a38 100644
+--- a/toolchain/download_ndk_linux_amd64_toolchain.bzl
++++ b/toolchain/download_ndk_linux_amd64_toolchain.bzl
+@@ -4,20 +4,40 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+ # This name is because of how the module use_repo prefixes extensions
+ NDK_PATH = "external/+download_ndk_linux_amd64_toolchain+ndk_linux_amd64"
+ 
+-def _download_ndk_linux_amd64_toolchain_impl(ctx):
+-    """Downloads the Android NDK under external/ndk_linux_amd64."""
++# skia-prep: the rust codec is built with the same Android NDK as the rest of
++# Skia (the GN build), instead of the r21e that used to be downloaded here.
++# Skia 157's core needs C++20 library features (std::to_array) that r21e's
++# libc++ lacks, and two NDKs in one package mixed two libc++ builds.
++#
++# The NDK root comes from SKIA_PREP_ANDROID_NDK, which scripts/build_skia.ps1
++# sets to the NDK it passes to GN as `ndk`. The extension is reproducible, so
++# MODULE.bazel.lock does not record it or the path.
++
++def _local_ndk_impl(rctx):
++    path = rctx.getenv("SKIA_PREP_ANDROID_NDK", "")
++    if not path:
++        fail("SKIA_PREP_ANDROID_NDK must name an Android NDK r27 root " +
++             "(scripts/build_skia.ps1 sets it to the NDK it gives GN).")
++    root = rctx.path(path)
++    if not root.get_child("source.properties").exists:
++        fail("SKIA_PREP_ANDROID_NDK is not an Android NDK root: " + path)
++    for entry in root.readdir():
++        rctx.symlink(entry, entry.basename)
++    rctx.symlink(rctx.attr.build_file, "BUILD.bazel")
+ 
+-    # Archive taken from https://github.com/android/ndk/wiki/Unsupported-Downloads#r21e.
+-    http_archive(
++_local_ndk = repository_rule(
++    implementation = _local_ndk_impl,
++    attrs = {"build_file": attr.label(allow_single_file = True)},
++    local = True,
++)
++
++def _download_ndk_linux_amd64_toolchain_impl(ctx):
++    """Exposes the Android NDK under external/ndk_linux_amd64."""
++    _local_ndk(
+         name = "ndk_linux_amd64",
+-        urls = [
+-            "https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip",
+-            "https://cdn.skia.org/bazel/ad7ce5467e18d40050dc51b8e7affc3e635c85bd8c59be62de32352328ed467e.zip",
+-        ],
+-        sha256 = "ad7ce5467e18d40050dc51b8e7affc3e635c85bd8c59be62de32352328ed467e",
+-        strip_prefix = "android-ndk-r21e",
+         build_file = Label("//toolchain:ndk.BUILD"),
+     )
++    return ctx.extension_metadata(reproducible = True)
+ 
+ download_ndk_linux_amd64_toolchain = module_extension(
+     implementation = _download_ndk_linux_amd64_toolchain_impl,
+diff --git a/toolchain/ndk.BUILD b/toolchain/ndk.BUILD
+index 3e89e67..d1bf55f 100644
+--- a/toolchain/ndk.BUILD
++++ b/toolchain/ndk.BUILD
+@@ -1,26 +1,14 @@
+ # This file is copied from the SkCMS repository. Original file:
+ # https://skia.googlesource.com/skcms/+/ba39d81f9797aa973bdf01aa6b0363b280352fba/toolchain/ndk.BUILD
+-
+-# This file is based on the `external/androidndk/BUILD.bazel` file produced by the built-in
+-# `android_ndk_repository` Bazel rule[1], which was used to build the SkCMS repository up until
+-# this revision[2].
+-#
+-# The paths in this file point to locations inside the expanded Android NDK ZIP file (found at
+-# external/ndk_linux_amd64), and must be updated every time we upgrade to a new Android NDK version.
+ #
+-# [1] https://github.com/bazelbuild/bazel/blob/4710ef82ce34572878e07c52e83a0144d707f140/src/main/java/com/google/devtools/build/lib/bazel/rules/android/AndroidNdkRepositoryFunction.java
+-# [2] https://skia.googlesource.com/skcms/+/30c8e303800c256febb03a09fdcda7f75d119b1b/WORKSPACE#22
++# skia-prep: rewritten for the NDK r27 layout (see download_ndk_linux_amd64_toolchain.bzl).
++# The sysroot, libc++ and its libraries all live under toolchains/llvm since r22.
++
++_SYSROOT_LIB = "toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/"
+ 
+ filegroup(
+     name = "arm64_v8a_all_files",
+-    srcs = glob(["toolchains/llvm/**"]) + glob([
+-        "platforms/android-29/arch-arm64/**/*",
+-        "sources/cxx-stl/llvm-libc++/include/**/*",
+-        "sources/cxx-stl/llvm-libc++abi/include/**/*",
+-        "sources/android/support/include/**/*",
+-        "sysroot/**/*",
+-        "toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/**/*",
+-    ]) + [
++    srcs = glob(["toolchains/llvm/**"]) + [
+         ":arm64_v8a_dynamic_runtime_libraries",
+         ":arm64_v8a_static_runtime_libraries",
+     ],
+@@ -29,26 +17,22 @@ filegroup(
+ 
+ filegroup(
+     name = "arm64_v8a_dynamic_runtime_libraries",
+-    srcs = glob(["sources/cxx-stl/llvm-libc++/libs/arm64-v8a/*.so"]),
++    srcs = [_SYSROOT_LIB + "aarch64-linux-android/libc++_shared.so"],
+     visibility = ["//visibility:public"],
+ )
+ 
+ filegroup(
+     name = "arm64_v8a_static_runtime_libraries",
+-    srcs = glob(["sources/cxx-stl/llvm-libc++/libs/arm64-v8a/*.a"]),
++    srcs = [
++        _SYSROOT_LIB + "aarch64-linux-android/libc++_static.a",
++        _SYSROOT_LIB + "aarch64-linux-android/libc++abi.a",
++    ],
+     visibility = ["//visibility:public"],
+ )
+ 
+ filegroup(
+     name = "armeabi_v7a_all_files",
+-    srcs = glob(["toolchains/llvm/**"]) + glob([
+-        "platforms/android-29/arch-arm/**/*",
+-        "sources/cxx-stl/llvm-libc++/include/**/*",
+-        "sources/cxx-stl/llvm-libc++abi/include/**/*",
+-        "sources/android/support/include/**/*",
+-        "sysroot/**/*",
+-        "toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/**/*",
+-    ]) + [
++    srcs = glob(["toolchains/llvm/**"]) + [
+         ":armeabi_v7a_dynamic_runtime_libraries",
+         ":armeabi_v7a_static_runtime_libraries",
+     ],
+@@ -57,12 +41,15 @@ filegroup(
+ 
+ filegroup(
+     name = "armeabi_v7a_dynamic_runtime_libraries",
+-    srcs = glob(["sources/cxx-stl/llvm-libc++/libs/armeabi-v7a/*.so"]),
++    srcs = [_SYSROOT_LIB + "arm-linux-androideabi/libc++_shared.so"],
+     visibility = ["//visibility:public"],
+ )
+ 
+ filegroup(
+     name = "armeabi_v7a_static_runtime_libraries",
+-    srcs = glob(["sources/cxx-stl/llvm-libc++/libs/armeabi-v7a/*.a"]),
++    srcs = [
++        _SYSROOT_LIB + "arm-linux-androideabi/libc++_static.a",
++        _SYSROOT_LIB + "arm-linux-androideabi/libc++abi.a",
++    ],
+     visibility = ["//visibility:public"],
+ )
+diff --git a/toolchain/ndk_linux_arm64_toolchain_config.bzl b/toolchain/ndk_linux_arm64_toolchain_config.bzl
+index df6737a..8798756 100644
+--- a/toolchain/ndk_linux_arm64_toolchain_config.bzl
++++ b/toolchain/ndk_linux_arm64_toolchain_config.bzl
+@@ -27,6 +27,13 @@ load(
+ load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+ load(":download_ndk_linux_amd64_toolchain.bzl", "NDK_PATH")
+ 
++# skia-prep: the NDK is r27 (see download_ndk_linux_amd64_toolchain.bzl). Since
++# r22 the sysroot and libc++ live under the LLVM prebuilt, and there is no GCC
++# toolchain. The API level is the package's ndk_api (minSdk), not 29.
++_SYSROOT = NDK_PATH + "/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
++_API = "26"
++_CLANG_VERSION = "18"
++
+ # Supported CPUs.
+ _ARMEABI_V7A = "armeabi-v7a"
+ _ARM64_V8A = "arm64-v8a"
+@@ -53,16 +60,13 @@ _all_link_actions = [
+ def _get_default_compile_flags(cpu):
+     if cpu == _ARMEABI_V7A:
+         return [
+-            "-D__ANDROID_API__=29",
+             "-isystem",
+-            NDK_PATH + "/sysroot/usr/include/arm-linux-androideabi",
++            _SYSROOT + "/usr/include/arm-linux-androideabi",
+             "-target",
+-            "armv7-none-linux-androideabi",
++            "armv7-none-linux-androideabi" + _API,
+             "-march=armv7-a",
+             "-mfloat-abi=softfp",
+             "-mfpu=vfpv3-d16",
+-            "-gcc-toolchain",
+-            NDK_PATH + "/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64",
+             "-fpic",
+             "-no-canonical-prefixes",
+             "-Wno-invalid-command-line-argument",
+@@ -73,14 +77,11 @@ def _get_default_compile_flags(cpu):
+         ]
+     if cpu == _ARM64_V8A:
+         return [
+-            "-gcc-toolchain",
+-            NDK_PATH + "/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64",
+             "-target",
+-            "aarch64-none-linux-android",
++            "aarch64-none-linux-android" + _API,
+             "-fpic",
+             "-isystem",
+-            NDK_PATH + "/sysroot/usr/include/aarch64-linux-android",
+-            "-D__ANDROID_API__=29",
++            _SYSROOT + "/usr/include/aarch64-linux-android",
+             "-no-canonical-prefixes",
+             "-Wno-invalid-command-line-argument",
+             "-Wno-unused-command-line-argument",
+@@ -94,23 +95,19 @@ def _get_default_link_flags(cpu):
+     if cpu == _ARMEABI_V7A:
+         return [
+             "-target",
+-            "armv7-none-linux-androideabi",
+-            "-gcc-toolchain",
+-            NDK_PATH + "/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64",
++            "armv7-none-linux-androideabi" + _API,
+             "-L",
+-            NDK_PATH + "/sources/cxx-stl/llvm-libc++/libs/armeabi-v7a",
++            _SYSROOT + "/usr/lib/arm-linux-androideabi",
+             "-no-canonical-prefixes",
+             "-Wl,-z,relro",
+             "-lm",
+         ]
+     if cpu == _ARM64_V8A:
+         return [
+-            "-gcc-toolchain",
+-            NDK_PATH + "/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64",
+             "-target",
+-            "aarch64-none-linux-android",
++            "aarch64-none-linux-android" + _API,
+             "-L",
+-            NDK_PATH + "/sources/cxx-stl/llvm-libc++/libs/arm64-v8a",
++            _SYSROOT + "/usr/lib/aarch64-linux-android",
+             "-no-canonical-prefixes",
+             "-Wl,-z,relro",
+             "-lm",
+@@ -147,9 +144,9 @@ def _get_target_system_name(cpu):
+ 
+ def _get_builtin_sysroot(cpu):
+     if cpu == _ARMEABI_V7A:
+-        return NDK_PATH + "/platforms/android-29/arch-arm"
++        return _SYSROOT
+     if cpu == _ARM64_V8A:
+-        return NDK_PATH + "/platforms/android-29/arch-arm64"
++        return _SYSROOT
+     fail("Unknown CPU: " + cpu)
+ 
+ def _get_tool_paths(cpu):
+@@ -250,13 +247,9 @@ def _ndk_cc_toolchain_config_impl(ctx):
+     default_compile_flags = _get_default_compile_flags(ctx.attr.cpu)
+     unfiltered_compile_flags = [
+         "-isystem",
+-        NDK_PATH + "/sources/cxx-stl/llvm-libc++/include",
+-        "-isystem",
+-        NDK_PATH + "/sources/cxx-stl/llvm-libc++abi/include",
+-        "-isystem",
+-        NDK_PATH + "/sources/android/support/include",
++        _SYSROOT + "/usr/include/c++/v1",
+         "-isystem",
+-        NDK_PATH + "/sysroot/usr/include",
++        _SYSROOT + "/usr/include",
+     ]
+     default_link_flags = _get_default_link_flags(ctx.attr.cpu)
+     default_fastbuild_flags = [""]
+@@ -371,9 +364,9 @@ def _ndk_cc_toolchain_config_impl(ctx):
+     ]
+ 
+     cxx_builtin_include_directories = [
+-        NDK_PATH + "/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/9.0.9/include",
++        NDK_PATH + "/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/" + _CLANG_VERSION + "/include",
+         "%sysroot%/usr/include",
+-        NDK_PATH + "/sysroot/usr/include",
++        _SYSROOT + "/usr/include",
+     ]
+ 
+     # https://bazel.build/rules/lib/cc_common#create_cc_toolchain_config_info
+@@ -384,7 +377,7 @@ def _ndk_cc_toolchain_config_impl(ctx):
+         target_system_name = _get_target_system_name(ctx.attr.cpu),
+         target_cpu = ctx.attr.cpu,
+         target_libc = "local",
+-        compiler = "clang9.0.9",
++        compiler = "clang" + _CLANG_VERSION,
+         abi_version = ctx.attr.cpu,
+         abi_libc_version = "local",
+         features = features,

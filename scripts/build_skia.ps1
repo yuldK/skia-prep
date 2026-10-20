@@ -465,8 +465,9 @@ Do one of these:
 # 판번은 Skia CI가 쓰는 r27d를 기대한다 (infra/bots/assets/android_ndk_linux).
 # 다른 판번도 받되 경고한다 — 이 저장소가 실측한 것은 그 하나뿐이다.
 #
-# rust 갈래의 C++ 브리지는 이것으로 컴파일되지 **않는다.** Bazel이 자기 NDK
-# (r21e)를 받아 쓴다. 그 판번은 toolchain.json의 rust_bridge_ndk_revision에 적는다.
+# rust 갈래의 C++ 브리지도 이 NDK로 컴파일된다. Skia의 Bazel은 원래 NDK r21e를 받아
+# 썼는데, skia-157-bazel-rust-android-ndk.patch가 이것을 쓰게 한다 (SKIA_PREP_ANDROID_NDK).
+# 그 판번은 toolchain.json의 rust_bridge_ndk_revision에 적어 둘이 같은지 남긴다.
 $expected_ndk_major = '27'
 $expected_ndk_revision = '27.3.13750724'
 
@@ -708,7 +709,7 @@ if ($argument_text -match 'skia_use_libgrapheme\s*=\s*true') {
 if ($argument_text -match 'skia_use_icu\s*=\s*true') {
     $required_externals.Add('icu')
 }
-# skia-152-separable-avif.patch의 인자다. libavif가 libgav1(AV1 디코더)과 libyuv
+# skia-157-separable-avif.patch의 인자다. libavif가 libgav1(AV1 디코더)과 libyuv
 # (YUV -> RGB)를 끌어온다 (third_party/libavif/BUILD.gn).
 if ($argument_text -match 'skia_prep_avif_archive\s*=\s*true') {
     $required_externals.Add('libavif')
@@ -747,6 +748,9 @@ if ($is_android) {
     $ndk_clang = Join-Path $ndk 'toolchains/llvm/prebuilt/linux-x86_64/bin/clang'
     $compiler_version = (& $ndk_clang --version | Select-Object -First 1).Trim()
     $argument_text += "`nndk = `"{0}`"`n" -f $ndk
+    # rust 코덱의 Bazel 도구사슬이 같은 NDK를 쓴다 (skia-157-bazel-rust-android-ndk.patch).
+    # GN의 bazel_build.py가 부르는 bazelisk가 이 환경을 물려받는다.
+    $env:SKIA_PREP_ANDROID_NDK = $ndk
 }
 elseif ($Toolchain -eq 'clang') {
     $clang_win = Resolve-ClangWin
@@ -876,18 +880,19 @@ Run: git submodule update --init third_party/skia-externals/$name
 #    148이 요구하던 Direct3D `operator==` 패치는 152에서 필요 없어졌다
 #    (`GrD3DBackendSurface.cpp`가 더 이상 가드 밖에서 부르지 않는다. Debug로 실측).
 $patch_set = @(
-    @('skia-152-separable-avif.patch', 'separable avif'),
-    @('skia-152-skshaper-legacy-split.patch', 'skshaper legacy split'),
-    @('skia-152-runtime-icu-system.patch', 'runtime icu system'),
-    @('skia-152-module-archives.patch', 'module archives'))
+    @('skia-157-separable-avif.patch', 'separable avif'),
+    @('skia-157-skshaper-legacy-split.patch', 'skshaper legacy split'),
+    @('skia-157-runtime-icu-system.patch', 'runtime icu system'),
+    @('skia-157-module-archives.patch', 'module archives'))
 if ($RustPng) {
     $patch_set += if ($is_android) {
-        @(@('skia-152-bazel-rust-android-triples.patch', 'rust android triples'),
-            @('skia-152-bazel-rust-android-platform.patch', 'rust android platform'))
+        @(@('skia-157-bazel-rust-android-ndk.patch', 'rust android ndk'),
+            @('skia-157-bazel-rust-android-triples.patch', 'rust android triples'),
+            @('skia-157-bazel-rust-android-platform.patch', 'rust android platform'))
     }
     else {
-        @(@('skia-152-bazel-rust-windows-outputs.patch', 'rust png outputs'),
-            @('skia-152-bazel-rust-windows-debug-crt.patch', 'rust png debug CRT'))
+        @(@('skia-157-bazel-rust-windows-outputs.patch', 'rust png outputs'),
+            @('skia-157-bazel-rust-windows-debug-crt.patch', 'rust png debug CRT'))
     }
 }
 if ($patch_set) {
@@ -993,8 +998,8 @@ finally {
 #
 #    Android의 기록은 갈래가 다르다. MSVC·SDK 대신 NDK 판번과 ndk_api를 적고,
 #    rust 갈래에서는 C++ 브리지를 컴파일한 **Bazel 쪽 NDK의 판번**을 함께 적는다 —
-#    한 아카이브 묶음 안에 두 NDK가 섞여 있다는 사실이 args.gn 어디에도 남지
-#    않기 때문이다. ndk는 이 기계의 경로이므로 pack_skia.ps1이 발행할 때 뺀다.
+#    Skia 152까지는 r21e가 섞였고(Bazel이 따로 받았다), 157부터는 같은 NDK다. 그것이
+#    args.gn에 남지 않으므로 여기 적는다. ndk는 이 기계의 경로이므로 pack_skia.ps1이 발행할 때 뺀다.
 if ($is_android) {
     $ndk_api = if ($argument_text -match '(?m)^\s*ndk_api\s*=\s*(\d+)') { [int]$Matches[1] } else { 21 }
     $rust_bridge_ndk_revision = ''
@@ -1041,7 +1046,7 @@ if ($is_android) {
     Write-Output "Skia build finished: $output_directory"
     Write-Output ("toolchain      : clang ({0}), NDK r{1}, ndk_api {2}" -f $compiler_version, $ndk_revision, $ndk_api)
     if ($rust_bridge_ndk_revision) {
-        Write-Output "rust bridge    : NDK r$rust_bridge_ndk_revision (Bazel's own)"
+        Write-Output "rust bridge    : NDK r$rust_bridge_ndk_revision (Bazel, through SKIA_PREP_ANDROID_NDK)"
     }
     Write-Output "Verify it with: scripts/verify_skia_root.ps1 -Target $Target"
     return

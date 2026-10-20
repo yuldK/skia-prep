@@ -22,10 +22,10 @@ link) and svg would not link without its private copy. The objects are only
 linked into an executable that calls them.
 
 diff --git a/BUILD.gn b/BUILD.gn
-index df31ad6..c7e74dd 100644
+index b1e29de..b3a7cba 100644
 --- a/BUILD.gn
 +++ b/BUILD.gn
-@@ -2013,6 +2013,10 @@ skia_component("skia") {
+@@ -2114,6 +2114,10 @@ skia_component("skia") {
      ":ml3",
      ":ml4",
      ":ndk_images",
@@ -124,7 +124,7 @@ index 268e805..0f6b203 100644
      public = skia_shaper_public
      deps = [ "../..:skia" ]
 diff --git a/modules/svg/BUILD.gn b/modules/svg/BUILD.gn
-index 8216ca6..b5c0b72 100644
+index 9bf0dd5..ba2adaa 100644
 --- a/modules/svg/BUILD.gn
 +++ b/modules/svg/BUILD.gn
 @@ -13,13 +13,21 @@ if (skia_enable_svg && skia_use_expat) {
