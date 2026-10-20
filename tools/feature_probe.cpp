@@ -470,6 +470,17 @@ public:
     std::vector<SkPoint> fPositions;
 };
 
+// 옛한글 조합을 가진다고 아는 글꼴인가. Android의 대체 글꼴은 "NN##fallback"으로
+// 이름이 붙는데, 한글의 대체 글꼴은 시스템의 Noto Sans CJK다. 그래서 Android에서는
+// 언제나 판정한다.
+bool HangulComposes(const SkString& family) {
+#if defined(__ANDROID__)
+    return true;
+#else
+    return family.contains("Noto") || family.contains("Source Han");
+#endif
+}
+
 // typeface를 주지 않으면 기본 글꼴에서 시작해 글자마다 대체 글꼴로 넘어간다
 // (MakeFontMgrRunIterator). 그 반복자는 **글자 단위**로 글꼴을 고르므로, 기본 글꼴에도
 // 있는 ZWJ나 자모 일부가 다른 run으로 떨어져 하나로 묶이지 못한다 (Windows의 Segoe UI에서
@@ -586,7 +597,7 @@ void ProbeText() {
     {
         const Collect jamo = Shape(fonts, kOldHangul, hangul);
         const bool one = jamo.glyphCount() >= 1 && jamo.clusterCount() == 1;
-        const bool capable = hangul_name.contains("Noto") || hangul_name.contains("Source Han");
+        const bool capable = HangulComposes(hangul_name);
         if (capable) {
             Report("hangul", one, "old hangul jamo (%s): %zu glyph(s), %zu cluster(s)",
                    hangul_name.c_str(), jamo.glyphCount(), jamo.clusterCount());
@@ -629,8 +640,7 @@ void ProbeText() {
             }
         });
         const bool hangul_case = utf8 == kOldHangul;
-        const bool judged = !hangul_case || hangul_name.contains("Noto") ||
-                            hangul_name.contains("Source Han");
+        const bool judged = !hangul_case || HangulComposes(hangul_name);
         if (judged) {
             Report("paragraph", glyphs >= 1 && clusters.size() == 1,
                    "%s from the default font: %d glyph(s), %zu cluster(s)",
