@@ -18,13 +18,16 @@
 // 들어가지 않으므로 여기서 직접 선언한다 (tools/skia_probe.cpp가 SkOpts를
 // 다루는 것과 같은 방식이다).
 //
-// 세우는 법 (WSL, NDK r27d). 스크립트가 아직 Android를 모르는 동안의 기록이다.
-// $out은 out/skia-ui-android-arm64-{release,debug}, 정의는 그 core.ninja의 -DSK*에서
-// SKIA_IMPLEMENTATION만 뺀 것이다.
+// 세우는 법 (WSL, NDK r27d). $pkg는 패키지 루트, $out은 그 out/skia-ui-{release,debug}다.
+// 정의는 Skia 빌드의 core.ninja에 있는 -DSK*에서 SKIA_IMPLEMENTATION만 빼고 -DSK_VULKAN을
+// 더한 것이다. 링크하는 것은 core 목록(third_party/features.json)이다.
 //
-//   aarch64-linux-android26-clang++ -std=c++20 $defines -I<skia> android_probe.cpp \r
-//       -Wl,--start-group $out/libskia.a $out/*.a -Wl,--end-group \r
-//       -Wl,--allow-multiple-definition -landroid -llog -static-libstdc++
+//   aarch64-linux-android26-clang++ -std=c++20 $defines -I$pkg android_probe.cpp \
+//       $out/libskia.a ... $out/librust_png_ffi_rs.a $out/libcxx_cc.a \
+//       -landroid -llog -static-libstdc++
+//
+// Skia 157 r1부터 -Wl,--allow-multiple-definition이 필요 없다. rust 아카이브에 겹쳐 들던
+// Skia·libc++ 오브젝트를 pack_skia.ps1이 걷는다 (docs/skia-build.md 8.5).
 //
 // 돌리는 법: adb push로 /data/local/tmp에 올리고 adb shell에서 실행한다.
 
