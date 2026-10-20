@@ -13,13 +13,16 @@ bazel 캐시 15 GB — 을 이 저장소 하나가 떠안는다. `luil`을 쓰�
 
 | 대상 | 세우는 곳 | 컴파일러 | GPU | Release · Debug zip |
 | --- | --- | --- | --- | --- |
-| `win-x64` (r3) | Windows | clang-cl | Direct3D | 24.8 MB · 157.9 MB (+ Release 심볼 87.8 MB) |
-| `android-arm64` (r2) | Linux (WSL2) | NDK r27d clang | Vulkan | 21.3 MB · 66.9 MB |
+| `win-x64` (157 r1) | Windows | clang-cl | Direct3D | 21.1 MB · 148.2 MB (+ Release 심볼 84.9 MB) |
+| `android-arm64` (157 r1) | Linux (WSL2) | NDK r27d clang | Vulkan | 18.5 MB · 57.2 MB |
+
+Skia는 157(`b94213a11b`, chrome/m157)이다.
 
 두 대상 모두 SVG(`SkSVGDOM`), 텍스트 모양 잡기(HarfBuzz·시스템 ICU·SkParagraph),
-Skottie, AVIF 디코드를 **기능별로 떨어진 아카이브**로 싣는다. 쓰지 않는 기능의
-아카이브는 링크하지 않아도 되고, 기존 목록만 링크한 실행 파일은 앞 판번과 크기가
-같다. 표와 쓰는 법은 [docs/skia-build.md](docs/skia-build.md) 6장에 있다.
+ICU가 없는 플랫폼의 fallback(libgrapheme), Skottie, AVIF 디코드를 **기능별로 떨어진
+아카이브**로 싣는다. 쓰지 않는 기능의 아카이브는 링크하지 않아도 되고, 기능 아카이브가
+늘어도 기존 목록만 링크한 실행 파일의 크기는 그대로다. 표와 쓰는 법은
+[docs/skia-build.md](docs/skia-build.md) 6장에 있다.
 
 iOS는 아직 없다. Skia의 iOS Bazel 도구사슬이 macOS에서만 돌아 Mac이 필요하다.
 
@@ -75,11 +78,13 @@ git submodule update --init third_party/skia-externals/icu
 git submodule update --init third_party/skia-externals/libavif
 git submodule update --init third_party/skia-externals/libgav1
 git submodule update --init third_party/skia-externals/libyuv
+git submodule update --init third_party/skia-externals/libgrapheme
 ```
 
-`libpng`과 `zlib`은 **물러설 자리인 libpng 갈래**에만 필요하다. 뒤의 여섯은 기능별
-아카이브의 것이다 — `icu`는 헤더로만 쓴다 (ICU는 실행 시점에 플랫폼의 것을 연다).
-`libgrapheme`·`unicodetools`는 지금 구성이 쓰지 않는다.
+`libpng`과 `zlib`은 **물러설 자리인 libpng 갈래**에만 필요하다. 뒤의 일곱과
+`unicodetools`는 기능별 아카이브의 것이다 — `icu`는 헤더와 BiDi 조각으로만 쓴다 (ICU는
+실행 시점에 플랫폼의 것을 연다). `unicodetools`는 수 GB라 libgrapheme이 읽는 UCD
+디렉터리만 sparse로 받는다 — 명령은 [docs/skia-build.md](docs/skia-build.md) 2장에 있다.
 
 ```powershell
 scripts\build_skia.ps1 -Configuration Release -RustPng
@@ -126,10 +131,10 @@ pwsh scripts/pack_skia.ps1 -Target android-arm64 -Configuration Release -Archive
 pwsh scripts/pack_skia.ps1 -Target android-arm64 -Configuration Debug -Destination build/skia-package-debug -Archive
 ```
 
-Skia 152를 그대로는 세울 수 없어 패치 둘을 건다 (Rust·crate의 대상 목록, Bazel에
-넘기는 플랫폼). 소비자는 `-Wl,--allow-multiple-definition`과 `-landroid -llog`로
-링크해야 하고, Vulkan 메모리 할당기를 직접 넘겨야 한다. 준비와 실측과 소비자의
-계약은 [docs/skia-build.md](docs/skia-build.md) 8장에 있다.
+Skia 157을 그대로는 세울 수 없어 패치 셋을 건다 (Bazel이 쓰는 NDK, Rust·crate의 대상
+목록, Bazel에 넘기는 플랫폼). 소비자는 `-landroid -llog`로 링크해야 하고, Vulkan 메모리
+할당기를 직접 넘겨야 한다. `-Wl,--allow-multiple-definition`은 157 r1부터 필요 없다.
+준비와 실측과 소비자의 계약은 [docs/skia-build.md](docs/skia-build.md) 8장에 있다.
 `tools/android_probe.cpp`가 기기 위에서 래스터·rust png·시스템 글꼴·Vulkan을 밟아
 확인한다 (실기기에서 통과).
 
@@ -148,7 +153,7 @@ MIT / Apache-2.0 / 0BSD / Zlib crate들. 상호주의 조항은 없다.
 
 기능별 아카이브가 더하는 것: Old MIT(HarfBuzz), Unicode License V3(ICU — 컴파일한
 헤더의 몫이다. 데이터는 싣지 않는다), BSD-2(libavif), Apache-2.0(libgav1),
-BSD-3 + 특허 허여(libyuv), MIT(Windows의 Expat). 앱이 실을 고지는 쓰는 기능에 따라
+BSD-3 + 특허 허여(libyuv), ISC(libgrapheme), MIT(Windows의 Expat). 앱이 실을 고지는 쓰는 기능에 따라
 다르다 — 패키지의 `NOTICE.json`이 기능마다 적는다.
 
 Android 패키지에는 넷이 더 들어간다: MIT(Vulkan Memory Allocator·Expat),

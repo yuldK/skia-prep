@@ -29,9 +29,12 @@ git submodule update --init third_party/skia-externals/icu
 git submodule update --init third_party/skia-externals/libavif
 git submodule update --init third_party/skia-externals/libgav1
 git submodule update --init third_party/skia-externals/libyuv
+git submodule update --init third_party/skia-externals/libgrapheme
 ```
 
-뒤의 여섯은 기능별 아카이브(SVG·텍스트·Skottie·AVIF)의 것이다 (skia-build.md 6장).
+뒤의 일곱은 기능별 아카이브(SVG·텍스트·텍스트 fallback·Skottie·AVIF)의 것이다
+(skia-build.md 6장). `unicodetools`는 UCD 디렉터리만 sparse로 받는다 — 명령은
+skia-build.md 2장에 있다.
 
 `gn`과 `ninja`는 `build_skia.ps1`이 알려진 자리에서 찾는다. 없으면 `-FetchTools`를
 주거나 `third_party/skia-tools/`에 넣는다.
@@ -98,14 +101,18 @@ scripts\pack_skia.ps1 -Configuration Debug -Destination build\skia-package-debug
 구성마다 zip이 하나씩 나온다. 헤더와 고지는 양쪽에 같은 것이 들어 있고, 소비자의
 `fetch_skia.ps1`이 둘을 한 루트로 합친다.
 
-이름에 **패키지 판번**이 들어간다 (`...-0873ec164a06-r2-win-x64-release.zip`).
+이름에 **패키지 판번**이 들어간다 (`...-b94213a11b3a-r1-win-x64-release.zip`).
 Skia commit만으로는 같은 소스를 다시 세운 두 패키지를 가리지 못하기 때문이다 —
 r1은 MSVC로 세운 것(번호를 붙이기 전이라 이름에 번호가 없다), r2는 clang-cl로 세워
 CPU 래스터 파이프라인이 SIMD 경로로 서는 것이다. 번호는 `pack_skia.ps1`의
 `$package_revisions`에 **대상마다 따로** 있고 `-PackageRevision`으로 덮어쓸 수 있다.
 
+판번은 Skia commit마다 1부터 다시 센다. 아래는 위가 최신이다.
+
 | 대상 | 판번 | 무엇인가 |
 | --- | --- | --- |
+| `win-x64` | 157 r1 | Skia 157. 텍스트 fallback(libgrapheme) 아카이브를 더했다. rust 아카이브의 중복을 걷었고, 다시 싸면 같은 zip이 나온다 |
+| `android-arm64` | 157 r1 | 위와 같다. 더해 `--allow-multiple-definition`이 필요 없고, Bazel의 rust 쪽도 NDK r27d다 |
 | `win-x64` | r3 | 기능별 아카이브(SVG·텍스트·Skottie·AVIF)와 Release 심볼 자산을 더했다. 그리고 Debug의 디버그 정보에서 생산자 경로를 걷었다 (아래) |
 | `android-arm64` | r2 | 기능별 아카이브(SVG·텍스트·Skottie·AVIF)를 더했다. `libskia.a`가 pathops를 담는다 |
 | `win-x64` | r2 | clang-cl로 세워 SIMD 경로로 선다 (r1은 MSVC). **Debug 자산에 사용자 이름이 실려 있다** |
@@ -115,6 +122,17 @@ CPU 래스터 파이프라인이 SIMD 경로로 서는 것이다. 번호는 `pac
 그것만으로는 다시 내지 않고, 기능별 아카이브와 함께 처음 낸다. 무엇을 막았는지는
 [skia-build.md](skia-build.md) 8.7에 있다. 기존 기능은 그대로다 — `bench_skia.ps1`로 r2와
 맞대어 픽셀이 바이트까지 같고, 기존 목록만 링크한 실행 파일이 r2와 같은 크기다.
+
+157 r1 (2026-10-21):
+
+| 자산 | 압축 | 푼 뒤 |
+| --- | --- | --- |
+| `...-b94213a11b3a-r1-win-x64-release.zip` | 21.1 MB | 72.5 MB |
+| `...-b94213a11b3a-r1-win-x64-debug.zip` | 148.2 MB | 558.6 MB |
+| `...-b94213a11b3a-r1-win-x64-release-symbols.zip` | 84.9 MB | 340.9 MB |
+
+r3보다 작은 것은 rust 아카이브에 겹쳐 들던 Skia 오브젝트를 걷었기 때문이다
+(skia-build.md 8.5). 152 r3:
 
 | 자산 | 압축 | 푼 뒤 |
 | --- | --- | --- |
@@ -150,16 +168,18 @@ crate 고지를 걷지 못하면 스크립트는 **멈춘다.** 고지 없이 �
 
 ## 5. 릴리스
 
-태그는 Skia의 밀번과 commit과 패키지 판번으로 짓는다: `skia-152-0873ec164a06-r2`.
+태그는 Skia의 밀번과 commit과 패키지 판번으로 짓는다: `skia-157-b94213a11b3a-r1`.
 판번이 붙는 이유는 자산 이름과 같다 — 같은 Skia commit을 다시 세운 것이 서로 다른
 물건일 수 있고, 태그가 자산이 놓이는 자리를 정하기 때문이다.
 
 ```powershell
-gh release create skia-152-0873ec164a06-r2 `
-    build\skia-prep-0873ec164a06-r2-win-x64-release.zip `
-    build\skia-prep-0873ec164a06-r2-win-x64-debug.zip `
-    --title "Skia 152 (0873ec164a06) win-x64 r2 - clang-cl SIMD" `
-    --notes-file build\release\NOTES.md
+gh release create skia-157-b94213a11b3a-r1 `
+    build\skia-prep-b94213a11b3a-r1-win-x64-release.zip `
+    build\skia-prep-b94213a11b3a-r1-win-x64-debug.zip `
+    build\skia-prep-b94213a11b3a-r1-win-x64-release-symbols.zip `
+    --target <원격에 있는 commit의 전체 SHA> `
+    --title "Skia 157 (b94213a11b3a) win-x64 r1" `
+    --notes-file NOTES.md
 ```
 
 **릴리스 본문은 Markdown으로 따로 쓴다.** `VERSION.json`을 `--notes-file`로 넘기면
@@ -191,28 +211,35 @@ GitHub이 아닌 자리(사내 파일 서버 등)에 올려도 된다. 소비자
 
 ```json
 {
-    "tag": "skia-152-0873ec164a06-r2",
-    "asset_base_url": "https://github.com/yuldK/skia-prep/releases/download/skia-152-0873ec164a06-r2",
+    "tag": "skia-157-b94213a11b3a-r1",
+    "asset_base_url": "https://github.com/yuldK/skia-prep/releases/download/skia-157-b94213a11b3a-r1",
     "png_codec": "rust",
-    "skia_commit": "0873ec164a06966b90ae0d43ef783cfb180084ae",
-    "package_revision": 2,
+    "skia_commit": "b94213a11b3a2edadfae89f0c57a7f4ab72772c9",
+    "package_revision": 1,
     "assets": {
         "Release": {
-            "file": "skia-prep-0873ec164a06-r2-win-x64-release.zip",
-            "size": 21485418,
-            "sha256": "4e944162ee1fd7b419bf16af3c760f70b496695fcdaebd9ceb96d4c258ac7f7e"
+            "file": "skia-prep-b94213a11b3a-r1-win-x64-release.zip",
+            "size": 22127677,
+            "sha256": "cb0c0b91e9ae427c0f3fed84a0e81d44202a1fc77240c44f037eed72cf172291"
         },
         "Debug": {
-            "file": "skia-prep-0873ec164a06-r2-win-x64-debug.zip",
-            "size": 142808948,
-            "sha256": "1a221b21b05408e793093b0b76934808ebc1b4f62834c8ac0419cb591cb25b67"
+            "file": "skia-prep-b94213a11b3a-r1-win-x64-debug.zip",
+            "size": 155444189,
+            "sha256": "d4496ce2eb745e6ed4281cb3e9737671e7addd823198dd77ac23f9dd0919cb16"
+        }
+    },
+    "optional_assets": {
+        "ReleaseSymbols": {
+            "file": "skia-prep-b94213a11b3a-r1-win-x64-release-symbols.zip",
+            "size": 88979256,
+            "sha256": "66c488ac1a456920de242d6464e77c623b8bf3d284dd154f15304a87e20693d5"
         }
     }
 }
 ```
 
-`skia_commit`이 그대로인데 `tag`와 파일 이름이 바뀐다. **그래서 판번이 있다** —
-소스가 같고 빌드가 다른 두 패키지를 commit만으로는 가리키지 못한다.
+같은 `skia_commit`을 다시 세우면 `tag`와 파일 이름만 바뀐다 (152의 r2→r3이 그랬다).
+**그래서 판번이 있다** — 소스가 같고 빌드가 다른 두 패키지를 commit만으로는 가리키지 못한다.
 
 `sha256`은 4단계가 찍은 값 그대로다. 값이 어긋나면 `fetch_skia.ps1`이 받은 파일을
 버리고 멈춘다 — 판번 고정이 이 파일 하나로 끝나는 이유다.
@@ -238,6 +265,7 @@ git submodule update --init third_party/skia-externals/libwebp
 git submodule update --init third_party/skia-externals/wuffs
 git submodule update --init third_party/skia-externals/libpng
 git submodule update --init third_party/skia-externals/zlib
+# 기능별 아카이브의 것(harfbuzz·icu·libavif·libgav1·libyuv·libgrapheme, unicodetools)은 1장과 같다
 
 pwsh scripts/build_skia.ps1 -Target android-arm64 -Configuration Release -RustPng
 pwsh scripts/build_skia.ps1 -Target android-arm64 -Configuration Debug   -RustPng
@@ -256,25 +284,28 @@ pwsh scripts/pack_skia.ps1 -Target android-arm64 -Configuration Debug -Destinati
 
 **기능 probe도 기기에서 돌린다.** `probe_features.ps1 -Target android-arm64`가 기능마다
 실행 파일을 세우고(실행하지는 않는다), adb로 올려 돌린다. 시험 이미지가 박혀 있어 실행
-파일 하나로 돈다. r2는 android_probe와 기능 probe 열 갈래가 Release·Debug 모두 통과했다.
+파일 하나로 돈다. r2는 android_probe와 기능 probe 열 갈래가 Release·Debug 모두 통과했고,
+157 r1은 `text_fallback`을 더한 열한 갈래가 통과했다.
 
-실측 (Skia 152):
+실측:
 
 | 자산 | 압축 | 푼 뒤 |
 | --- | --- | --- |
+| `skia-prep-b94213a11b3a-r1-android-arm64-release.zip` (Skia 157) | 18.5 MB | 59.8 MB |
+| `skia-prep-b94213a11b3a-r1-android-arm64-debug.zip` | 57.2 MB | 276.7 MB |
 | `skia-prep-0873ec164a06-r1-android-arm64-release.zip` | 16.3 MB | 54 MB |
 | `skia-prep-0873ec164a06-r1-android-arm64-debug.zip` | 48.1 MB | 225 MB |
 | `skia-prep-0873ec164a06-r2-android-arm64-release.zip` | 21.3 MB | 71 MB |
 | `skia-prep-0873ec164a06-r2-android-arm64-debug.zip` | 66.9 MB | 327 MB |
 
-**태그에 대상을 넣는다.** 판번을 대상마다 따로 세므로 `skia-152-0873ec164a06-r1`은
+**태그에 대상을 넣는다.** 판번을 대상마다 따로 세므로 `skia-157-b94213a11b3a-r1`은
 Windows의 r1과 겹친다.
 
 ```powershell
-gh release create skia-152-0873ec164a06-android-arm64-r1 `
-    \\wsl.localhost\Ubuntu-24.04\home\<사용자>\skia-prep\build\skia-prep-0873ec164a06-r1-android-arm64-release.zip `
-    \\wsl.localhost\Ubuntu-24.04\home\<사용자>\skia-prep\build\skia-prep-0873ec164a06-r1-android-arm64-debug.zip `
-    --title "Skia 152 (0873ec164a06) android-arm64 r1" `
+gh release create skia-157-b94213a11b3a-android-arm64-r1 `
+    \\wsl.localhost\Ubuntu-24.04\home\<사용자>\skia-prep\build\skia-prep-b94213a11b3a-r1-android-arm64-release.zip `
+    \\wsl.localhost\Ubuntu-24.04\home\<사용자>\skia-prep\build\skia-prep-b94213a11b3a-r1-android-arm64-debug.zip `
+    --title "Skia 157 (b94213a11b3a) android-arm64 r1" `
     --notes-file NOTES.md
 ```
 
@@ -285,7 +316,8 @@ gh release create skia-152-0873ec164a06-android-arm64-r1 `
 저장소 첫 화면의 Latest가 Android 자산이 된다. luil의 핀은 태그를 직접 가리키므로
 받는 데는 영향이 없다. Windows 릴리스를 Latest로 두려면 `--latest=false`를 준다.
 
-Windows의 태그(`skia-152-0873ec164a06-r2`)는 대상을 넣기 전에 지은 이름이라 그대로 둔다.
+Windows의 태그(`skia-157-b94213a11b3a-r1`)에는 대상을 넣지 않는다. 대상을 넣기 전에 지은
+152의 이름(`skia-152-0873ec164a06-r2`)과 같은 꼴을 지켜 luil의 핀이 그대로 읽힌다.
 
 luil에는 아직 Android 핀이 없다. luil이 Android를 세우기 시작할 때 이 자산을 가리키는
 핀을 따로 둔다 — Windows 핀(`third_party/skia-prep.json`)은 `target`이 `win-x64`로
