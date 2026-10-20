@@ -220,6 +220,80 @@ function Get-FileHashText {
     return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+# 패키지에 적는 시각이다. **같은 빌드 산출물이면 언제 싸도 같은 값이어야 한다** —
+# 그래야 다시 싼 zip의 SHA-256이 그대로라, 해시만으로 "무엇이 바뀌었는가"를 가를 수
+# 있다. 그래서 지금 시각이 아니라 담는 빌드 중 가장 늦게 끝난 것의 built_at
+# (build_skia.ps1이 toolchain.json에 적는다)을 쓴다. SOURCE_DATE_EPOCH(재현 빌드의
+# 관례인 유닉스 초)가 있으면 그것이 먼저다.
+#
+# 2026-10-20에 android-arm64 r2를 NOTICE.json 하나 때문에 다시 쌌을 때, 아카이브 29개가
+# 바이트까지 같은데도 zip의 해시가 바뀌었다. 바꾼 것은 packaged_at과 zip 항목의
+# 시각·순서였다.
+function Get-PackageTimestamp {
+    param([string[]]$toolchain_files)
+
+    if ($env:SOURCE_DATE_EPOCH) {
+        return [DateTimeOffset]::FromUnixTimeSeconds([long]$env:SOURCE_DATE_EPOCH)
+    }
+    $latest = $null
+    foreach ($file in $toolchain_files) {
+        # ConvertFrom-Json은 ISO 날짜를 DateTime으로 바꿔 줄 때도, 문자열로 둘 때도 있다
+        # (pwsh 판번에 따라 다르다). 원문에서 직접 읽는다.
+        $text = Get-Content -Raw -LiteralPath $file
+        if ($text -notmatch '"built_at"\s*:\s*"([^"]+)"') {
+            throw "toolchain.json has no built_at: $file"
+        }
+        $value = [DateTimeOffset]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AssumeUniversal)
+        if (-not $latest -or $value -gt $latest) {
+            $latest = $value
+        }
+    }
+    return $latest.ToUniversalTime()
+}
+
+# zip을 결정적으로 쓴다. Compress-Archive는 항목의 시각을 파일의 mtime으로, 순서를
+# 디렉터리를 훑은 순서로 넣어 같은 내용에서 다른 바이트가 나온다. 여기서는 항목을
+# 경로의 ordinal 순서로 정렬하고, 시각을 하나로 고정하고, 디렉터리 항목 없이 파일만
+# 넣는다. 압축은 .NET의 Deflate(Optimal)이라 같은 pwsh·.NET 판번이면 같은 바이트가 난다.
+# Expand-Archive와 luil의 fetch_skia.ps1은 이 zip을 그대로 푼다.
+function Write-PackageZip {
+    param([string]$source, [string]$destination, [DateTimeOffset]$timestamp)
+
+    Add-Type -AssemblyName System.IO.Compression
+    $root = (Resolve-Path -LiteralPath $source).Path.TrimEnd('\', '/')
+    $entries = @{}
+    foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -File -Force) {
+        $entries[$file.FullName.Substring($root.Length + 1).Replace('\', '/')] = $file.FullName
+    }
+    [string[]]$names = @($entries.Keys)
+    [Array]::Sort($names, [StringComparer]::Ordinal)
+    # DOS 시각은 시간대가 없다. 오프셋 0으로 넘겨 UTC 시각을 그대로 적는다 —
+    # 생산자 기계의 시간대가 zip에 들어가지 않는다.
+    $stamp = [DateTimeOffset]::new($timestamp.UtcDateTime.Ticks, [TimeSpan]::Zero)
+    $stream = [System.IO.File]::Open($destination, [System.IO.FileMode]::CreateNew)
+    $zip = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($name in $names) {
+            $entry = $zip.CreateEntry($name, [System.IO.Compression.CompressionLevel]::Optimal)
+            $entry.LastWriteTime = $stamp
+            $input_stream = [System.IO.File]::OpenRead($entries[$name])
+            $output_stream = $entry.Open()
+            try {
+                $input_stream.CopyTo($output_stream)
+            }
+            finally {
+                $output_stream.Dispose()
+                $input_stream.Dispose()
+            }
+        }
+    }
+    finally {
+        $zip.Dispose()
+        $stream.Dispose()
+    }
+}
+
 # 어느 png 코덱으로 세운 빌드인지는 args.gn이 말한다.
 # 발행하는 것은 rust 갈래뿐이지만 libpng 갈래는 물러설 자리로 남아 있으므로
 # (skia-prep의 README) 여기서는 둘 다 만들 수 있어야 한다.
@@ -1002,10 +1076,12 @@ else {
     }
 }
 
+# 지금 시각이 아니라 빌드의 시각이다 (Get-PackageTimestamp). zip 항목의 시각도 같다.
+$package_timestamp = Get-PackageTimestamp -toolchain_files @($builds | ForEach-Object { $_.toolchain })
 $version = [ordered]@{
     schema                 = 2
     package_revision       = $package_revision
-    packaged_at            = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    packaged_at            = $package_timestamp.ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
     skia                   = [ordered]@{
         commit    = $skia_commit
         milestone = $milestone
@@ -1129,7 +1205,7 @@ if ($Archive) {
     if (Test-Path -LiteralPath $archive_path) {
         Remove-Item -LiteralPath $archive_path -Force
     }
-    Compress-Archive -Path (Join-Path $package_root '*') -DestinationPath $archive_path -CompressionLevel Optimal
+    Write-PackageZip -source $package_root -destination $archive_path -timestamp $package_timestamp
     $archive_size = (Get-Item -LiteralPath $archive_path).Length
     Write-Output ('Archive: {0} ({1:N1} MB)' -f $archive_path, ($archive_size / 1MB))
     Write-Output ('SHA-256: {0}' -f (Get-FileHashText -path $archive_path))
