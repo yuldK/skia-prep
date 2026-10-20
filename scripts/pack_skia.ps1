@@ -784,6 +784,7 @@ if ($is_android) {
         throw 'toolchain.json has no ndk path, so the cpu-features notice cannot be read. Rebuild with build_skia.ps1.'
     }
     $notices.Add(@{
+            id   = 'cpu-features'
             name = 'Android NDK cpu-features'
             path = (Join-Path $ndk_root 'sources/android/cpufeatures/NOTICE')
         })

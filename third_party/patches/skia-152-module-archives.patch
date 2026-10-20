@@ -15,8 +15,27 @@ depends on.
 
 This sets complete_static_lib = false on svg, sksg, skottie, skshaper and
 skparagraph and
-drops their :pathops dependency. :skia is untouched.
+drops their :pathops dependency. In exchange :skia depends on :pathops
+directly. It held pathops only through :xps, which is Windows only, so on
+Android libskia.a had no SkPathOps definitions at all (an Op() call did not
+link) and svg would not link without its private copy. The objects are only
+linked into an executable that calls them.
 
+diff --git a/BUILD.gn b/BUILD.gn
+index df31ad6..c7e74dd 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -2013,6 +2013,10 @@ skia_component("skia") {
+     ":ml3",
+     ":ml4",
+     ":ndk_images",
++    # skia-prep: the modules no longer carry their own copy of pathops
++    # (see their BUILD.gn), so :skia holds it on every target. On Windows
++    # :xps already pulled it in; elsewhere SkPathOps.h had no definitions.
++    ":pathops",
+     ":png_decode_rust",
+     ":raw",
+     ":rust_icc",
 diff --git a/modules/skottie/BUILD.gn b/modules/skottie/BUILD.gn
 index fc95703..eee0b09 100644
 --- a/modules/skottie/BUILD.gn
