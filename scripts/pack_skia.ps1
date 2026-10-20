@@ -52,7 +52,11 @@ param(
     # 컴파일에만 붙는 정의다. 소비자는 NDK의 <vulkan/vulkan_core.h>로 선다
     # (tools/android_probe.cpp가 그렇게 컴파일되어 기기에서 돈다).
     # 다른 backend로 빌드한 Skia를 담을 때만 이 스위치를 준다.
-    [switch]$IncludeVendorHeaders
+    [switch]$IncludeVendorHeaders,
+    # zip 이름의 구성 뒤에 붙는다. Release 심볼 자산을 낼 때 '-symbols'를 준다
+    # (build_skia.ps1 -DebugInfo -OutputSuffix '-sym'로 세운 것을 -OutputSuffix '-sym'로
+    # 읽어 싼다). 기본 자산과 이름이 갈려야 받는 쪽이 고를 수 있다.
+    [string]$ArchiveSuffix
 )
 
 $ErrorActionPreference = 'Stop'
@@ -1114,8 +1118,8 @@ if ($Archive) {
     # 때문이다. r1은 번호를 붙이기 전에 발행한 MSVC 패키지라 이름에 번호가 없다.
     # 판번은 대상마다 따로 세므로 대상과 짝으로 읽는다 (r2-win-x64, r1-android-arm64).
     $codec_part = if ($png_codec -eq 'rust') { '' } else { "-$png_codec" }
-    $archive_name = 'skia-prep-{0}-r{1}-{2}{3}-{4}.zip' -f `
-        $suffix, $package_revision, $Target, $codec_part, $flavour
+    $archive_name = 'skia-prep-{0}-r{1}-{2}{3}-{4}{5}.zip' -f `
+        $suffix, $package_revision, $Target, $codec_part, $flavour, $ArchiveSuffix
     $archive_path = Join-Path (Split-Path -Parent $package_root) $archive_name
     if (Test-Path -LiteralPath $archive_path) {
         Remove-Item -LiteralPath $archive_path -Force

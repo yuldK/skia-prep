@@ -54,7 +54,12 @@ param(
     [string]$PythonPath,
     [switch]$CopyExternals,
     [switch]$FetchTools,
-    [switch]$RustPng
+    [switch]$RustPng,
+    # win-x64 Release에 /Z7 디버그 정보를 더한다. 발행하는 Release 심볼 자산
+    # (...-release-symbols.zip)을 만들 때만 쓰고, -OutputSuffix '-sym'과 함께 준다.
+    # 코드는 그대로다 — 이것으로 링크한 실행 파일은 /DEBUG를 주지 않으면 크기까지
+    # 같다 (2026-10 실측). docs/skia-build.md 6.7.
+    [switch]$DebugInfo
 )
 
 $ErrorActionPreference = 'Stop'
@@ -554,6 +559,20 @@ if (-not (Test-Path -LiteralPath $png_argument_file)) {
 }
 $argument_text = (Get-Content -Raw -LiteralPath $ArgumentFile) + "`n" +
     (Get-Content -Raw -LiteralPath $png_argument_file)
+if ($DebugInfo) {
+    if ($is_android -or $Configuration -ne 'Release' -or $Toolchain -ne 'clang') {
+        throw '-DebugInfo is for the win-x64 Release symbols asset only (clang-cl, Release).'
+    }
+    if (-not $OutputSuffix) {
+        throw '-DebugInfo needs -OutputSuffix (for example -sym); it must not replace the Release build.'
+    }
+    # 한 변수에 두 번 대입하면 gn이 거부하므로 있던 줄을 고친다.
+    $with_debug_info = $argument_text -replace 'extra_cflags\s*=\s*\[\s*"/MT"\s*\]', 'extra_cflags = [ "/MT", "/Z7" ]'
+    if ($with_debug_info -eq $argument_text) {
+        throw "-DebugInfo expected extra_cflags = [ `"/MT`" ] in $ArgumentFile."
+    }
+    $argument_text = $with_debug_info
+}
 
 # rust 코덱은 cargo가 아니라 Bazel로 선다.
 # Skia의 BUILD.gn이 gn/bazel_build.py를 부르고 그 script가 bazelisk를 실행한다.
