@@ -13,8 +13,13 @@ bazel 캐시 15 GB — 을 이 저장소 하나가 떠안는다. `luil`을 쓰�
 
 | 대상 | 세우는 곳 | 컴파일러 | GPU | Release · Debug zip |
 | --- | --- | --- | --- | --- |
-| `win-x64` | Windows | clang-cl | Direct3D | 19.6 MB · 112.6 MB |
-| `android-arm64` | Linux (WSL2) | NDK r27d clang | Vulkan | 16.3 MB · 48.1 MB |
+| `win-x64` (r3) | Windows | clang-cl | Direct3D | 24.8 MB · 157.9 MB (+ Release 심볼 87.8 MB) |
+| `android-arm64` (r2) | Linux (WSL2) | NDK r27d clang | Vulkan | 21.3 MB · 66.9 MB |
+
+두 대상 모두 SVG(`SkSVGDOM`), 텍스트 모양 잡기(HarfBuzz·시스템 ICU·SkParagraph),
+Skottie, AVIF 디코드를 **기능별로 떨어진 아카이브**로 싣는다. 쓰지 않는 기능의
+아카이브는 링크하지 않아도 되고, 기존 목록만 링크한 실행 파일은 앞 판번과 크기가
+같다. 표와 쓰는 법은 [docs/skia-build.md](docs/skia-build.md) 6장에 있다.
 
 iOS는 아직 없다. Skia의 iOS Bazel 도구사슬이 macOS에서만 돌아 Mac이 필요하다.
 
@@ -30,9 +35,12 @@ iOS는 아직 없다. Skia의 iOS Bazel 도구사슬이 macOS에서만 돌아 Ma
 
 ```
 include/              Skia 공개 헤더 2.1 MB (include/third_party/ 는 뺀다)
-modules/skcms/        공개 헤더가 include/ 밖에서 참조하는 유일한 것
+modules/skcms/        공개 헤더가 include/ 밖에서 참조하는 것
+modules/*/include/    기능의 공개 헤더 (svg·skshaper·skunicode·skparagraph·skottie·sksg·skresources)
+src/core/ 등          그 헤더가 여는 Skia 내부 헤더 열하나 (pack_skia.ps1이 include를 따라 싣는다)
 LICENSE               Skia 원문. 헤더가 소스 형태로 나가므로 필수다
 NOTICE.md             정적으로 들어간 모든 것의 고지를 모은 한 장
+NOTICE.json           아카이브마다 담긴 것과 기능마다 링크되는 것의 고지 id
 licenses/rust/        rust 갈래에서만. Rust 표준 라이브러리 고지
 VERSION.json          Skia commit·밀번·png 갈래·도구사슬·패키지 판번·파일별 SHA-256
 out/skia-ui-release/  *.lib *.a args.gn toolchain.json   (Android는 *.a뿐이다)
@@ -61,11 +69,17 @@ git submodule update --init third_party/skia-externals/libwebp
 git submodule update --init third_party/skia-externals/wuffs
 git submodule update --init third_party/skia-externals/libpng
 git submodule update --init third_party/skia-externals/zlib
+git submodule update --init third_party/skia-externals/expat
+git submodule update --init third_party/skia-externals/harfbuzz
+git submodule update --init third_party/skia-externals/icu
+git submodule update --init third_party/skia-externals/libavif
+git submodule update --init third_party/skia-externals/libgav1
+git submodule update --init third_party/skia-externals/libyuv
 ```
 
-`libpng`과 `zlib`은 **물러설 자리인 libpng 갈래**에만 필요하다.
-`harfbuzz`·`libgrapheme`·`unicodetools`·`icu`는 텍스트 구성에서만 쓰며, 작업 트리가
-3.3 GB라 평소에는 받지 않는다.
+`libpng`과 `zlib`은 **물러설 자리인 libpng 갈래**에만 필요하다. 뒤의 여섯은 기능별
+아카이브의 것이다 — `icu`는 헤더로만 쓴다 (ICU는 실행 시점에 플랫폼의 것을 연다).
+`libgrapheme`·`unicodetools`는 지금 구성이 쓰지 않는다.
 
 ```powershell
 scripts\build_skia.ps1 -Configuration Release -RustPng
@@ -73,7 +87,10 @@ scripts\build_skia.ps1 -Configuration Debug   -RustPng
 scripts\verify_skia_root.ps1
 scripts\pack_skia.ps1 -Configuration Release -Archive
 scripts\pack_skia.ps1 -Configuration Debug -Destination build\skia-package-debug -Archive
+scripts\probe_features.ps1 -PackageRoot build\skia-package -Configuration Release
 ```
+
+Release 심볼 자산은 `build_skia.ps1 -DebugInfo`로 따로 세운다 (docs/skia-build.md 6.7).
 
 **Skia 자신은 clang-cl로 컴파일한다.** 소비자는 그대로 MSVC이고, 헤더와 CRT도 여전히
 MSVC의 것을 쓴다 — 바뀌는 것은 Skia를 컴파일하는 컴파일러 하나다.
@@ -128,6 +145,11 @@ Skia와 그 external, rust 갈래에서는 crate와 Rust 표준 라이브러리�
 Wuffs), MIT(SPIRV-Headers·D3D12MemoryAllocator), IJG + BSD-3(libjpeg-turbo),
 PNG Reference Library License v2(libpng), Zlib(zlib), 그리고 rust 갈래의
 MIT / Apache-2.0 / 0BSD / Zlib crate들. 상호주의 조항은 없다.
+
+기능별 아카이브가 더하는 것: Old MIT(HarfBuzz), Unicode License V3(ICU — 컴파일한
+헤더의 몫이다. 데이터는 싣지 않는다), BSD-2(libavif), Apache-2.0(libgav1),
+BSD-3 + 특허 허여(libyuv), MIT(Windows의 Expat). 앱이 실을 고지는 쓰는 기능에 따라
+다르다 — 패키지의 `NOTICE.json`이 기능마다 적는다.
 
 Android 패키지에는 넷이 더 들어간다: MIT(Vulkan Memory Allocator·Expat),
 Apache-2.0(NDK의 cpu-features), 그리고 FreeType. FreeType은 FTL과 GPLv2 중 하나를

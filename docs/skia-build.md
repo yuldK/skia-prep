@@ -68,7 +68,8 @@ cmake --preset vs2026 `
 
 ## 2. submodule 초기화
 
-기본 구성에 필요한 것은 아홉이다. 앞의 넷은 Skia와 렌더러가, 뒤의 다섯은 이미지 코덱이 쓴다.
+기본 구성에 필요한 것은 열넷이다. 앞의 넷은 Skia와 렌더러가, 가운데 다섯은 이미지
+코덱이, 뒤의 다섯은 기능별 아카이브(6장)가 쓴다.
 
 ```powershell
 git submodule update --init third_party/skia
@@ -81,7 +82,18 @@ git submodule update --init third_party/skia-externals/libwebp
 git submodule update --init third_party/skia-externals/wuffs
 git submodule update --init third_party/skia-externals/libpng
 git submodule update --init third_party/skia-externals/zlib
+
+git submodule update --init third_party/skia-externals/expat
+git submodule update --init third_party/skia-externals/harfbuzz
+git submodule update --init third_party/skia-externals/icu
+git submodule update --init third_party/skia-externals/libavif
+git submodule update --init third_party/skia-externals/libgav1
+git submodule update --init third_party/skia-externals/libyuv
 ```
+
+`icu`는 **헤더로만** 쓴다 (작업 트리 237 MB). ICU를 컴파일하지도 데이터를 싣지도
+않는다 — 실행 시점에 플랫폼의 ICU를 연다 (6.4). `libgrapheme`·`unicodetools`는
+.gitmodules에 남아 있지만 지금 구성은 쓰지 않는다.
 
 `libpng`과 `zlib`은 기본(libpng) png 구성만 쓴다. `-RustPng`으로 빌드한다면 둘은
 필요하지 않다 (5.2).
@@ -89,8 +101,9 @@ git submodule update --init third_party/skia-externals/zlib
 commit은 Skia의 `DEPS`에 적힌 것과 같게 고정한다. `libjpeg-turbo`·`libwebp`·`zlib`은
 GitHub 대응물이 Skia의 `BUILD.gn`이 기대하는 구조와 달라(chromium 포크가 `jconfig.h`
 같은 생성 파일을 함께 담는다) `chromium.googlesource.com`을, `libpng`은
-`skia.googlesource.com`을 그대로 쓴다. `wuffs`만 GitHub 원본
-(`google/wuffs-mirror-release-c`)이 같은 commit을 담고 있어 그쪽을 본다.
+`skia.googlesource.com`을 그대로 쓴다. `wuffs`·`libavif`는 GitHub 원본
+(`google/wuffs-mirror-release-c`, `AOMediaCodec/libavif`)이 같은 commit을 담고 있어
+그쪽을 본다. `libgav1`·`libyuv`는 GitHub 원본이 없어 `chromium.googlesource.com`이다.
 
 test를 빌드할 때만 Catch2가 추가로 필요하다. 라이브러리만 빌드한다면 초기화하지 않아도 된다.
 
@@ -161,6 +174,12 @@ third_party/skia/third_party/externals/libwebp         ->  third_party/skia-exte
 third_party/skia/third_party/externals/wuffs           ->  third_party/skia-externals/wuffs
 third_party/skia/third_party/externals/libpng          ->  third_party/skia-externals/libpng
 third_party/skia/third_party/externals/zlib            ->  third_party/skia-externals/zlib
+third_party/skia/third_party/externals/expat           ->  third_party/skia-externals/expat
+third_party/skia/third_party/externals/harfbuzz        ->  third_party/skia-externals/harfbuzz
+third_party/skia/third_party/externals/icu             ->  third_party/skia-externals/icu
+third_party/skia/third_party/externals/libavif         ->  third_party/skia-externals/libavif
+third_party/skia/third_party/externals/libgav1         ->  third_party/skia-externals/libgav1
+third_party/skia/third_party/externals/libyuv          ->  third_party/skia-externals/libyuv
 ```
 
 무엇이 필요한지는 GN args가 정한다. 스크립트가 인자 파일을 읽어 켜진 코덱의
@@ -172,11 +191,26 @@ Skia 저장소의 `.gitignore`가 `third_party/externals`를 무시하므로 sub
 
 ### 4.2 패치
 
-**기본 구성에는 패치가 없다.** Skia 152는 손대지 않고 그대로 선다.
+**모듈 패치 넷은 언제나 건다** — 대상과 png 갈래에 무관하다. 넷 모두 기능을 기존
+아카이브와 떼어 놓기 위한 것이고, 이유는 6장에 있다.
+
+```powershell
+git -C third_party\skia apply ..\patches\skia-152-separable-avif.patch
+git -C third_party\skia apply ..\patches\skia-152-skshaper-legacy-split.patch
+git -C third_party\skia apply ..\patches\skia-152-runtime-icu-system.patch
+git -C third_party\skia apply ..\patches\skia-152-module-archives.patch
+```
+
+| 패치 | 하는 일 |
+| --- | --- |
+| `separable-avif` | AVIF 디코더를 skia 밖의 `avif_decoder`로 세운다 (`skia_prep_avif_archive`). `skia_use_libavif`는 SkCodec의 기본 목록에 AVIF를 넣어 모든 소비자가 libavif·libgav1·libyuv를 링크하게 만든다 |
+| `skshaper-legacy-split` | HarfBuzz·SkUnicode를 부르는 옛 SkShaper 함수를 `SkShaper_legacy.cpp`로 옮긴다. SVG가 부르는 `MakeFontMgrRunIterator`와 한 오브젝트였다 |
+| `runtime-icu-system` | runtime ICU 로더가 Android의 `libicu.so`와 Windows의 `icu.dll`을 연다 (6.4) |
+| `module-archives` | 모듈 아카이브가 자기 오브젝트만 담는다. 그리고 `:skia`가 pathops를 직접 담는다 |
 
 148이 요구하던 Direct3D `operator==` 패치는 152에서 필요 없어졌다 — `GrD3DBackendSurface.cpp`가 더 이상 가드 밖에서 그것을 부르지 않는다. Debug로 실측했다(그 실패는 `SK_DEBUG`가 켜진 구성에서만 드러난다).
 
-`-RustPng` 구성만 두 개가 필요하다.
+`-RustPng` 구성은 두 개가 더 필요하다.
 
 ```powershell
 git -C third_party\skia apply ..\patches\skia-152-bazel-rust-windows-outputs.patch
@@ -222,7 +256,7 @@ ninja -C third_party\skia\out\skia-ui-release skia
 ## 5. GN args에서 주의할 점
 
 인자는 **두 파일이 한 벌**이다. 기본 파일(`skia-ui-release.gn`·`skia-ui-debug.gn`·
-`skia-ui-release-text.gn`)에는 png와 zlib이 없고, `png-libpng.gn`이나 `png-rust.gn`
+Android의 둘)에는 png와 zlib이 없고, `png-libpng.gn`이나 `png-rust.gn`
 중 하나를 뒤에 이어 붙여 완성한다 (5.2). 스크립트가 이어 붙이며, 한 변수에 두 번
 대입하면 gn이 거부하므로 겹치는 줄은 어느 쪽에도 없다.
 
@@ -243,6 +277,10 @@ ninja -C third_party\skia\out\skia-ui-release skia
 | `skia_enable_fontmgr_win` | 명시하지 않는다. Windows 기본값 `true`이며 `SkFontMgr_New_DirectWrite`가 여기에 의존한다 |
 | `is_trivial_abi = false` | **clang으로 세우는 동안의 ABI 계약이다** (5.4). MSVC에서는 값이 무엇이든 무해했다 |
 | `skia_use_partition_alloc = false` | 기본값이 `is_clang`이다. 도구사슬을 바꾸는 것만으로 켜져 `partition_alloc` external을 새로 요구하고 (없으면 `gn gen`이 거기서 죽는다), Skia 안의 `raw_ptr`을 noop에서 실물로 바꾼다 (실측) |
+| `skia_use_system_expat = false`<br>(`skia_use_system_harfbuzz`·`skia_use_system_icu`도 같다) | `third_party/expat/BUILD.gn`의 기본값이 `is_official_build`다. 위의 코덱과 같은 함정이다 |
+| `skia_pdf_subset_harfbuzz = false` | 기본값이 `skia_use_harfbuzz`다. PDF를 끄므로 지금은 뜻이 없지만, 켜 둔 채 PDF를 켜면 harfbuzz가 skia.lib 안으로 들어간다 |
+| `skia_use_libavif = false`<br>`skia_prep_avif_archive = true` | 앞엣것은 AVIF를 skia의 기본 디코더 목록에 넣는다. 뒤엣것(패치의 인자)이 같은 디코더를 따로 된 아카이브로 세운다 (6.3) |
+| `skia_use_runtime_icu = true` | SkUnicode가 ICU를 실행 시점에 연다. 기본 갈래(`skia_use_icu`만)는 ICU를 소스째 컴파일하고 Windows에서 `icudtl.dat`(수십 MB)를 실행 파일 옆에서 읽는다 (6.4) |
 
 코덱을 켜면 산출물도 늘어난다. luil `CMakeLists.txt`의 `LUIL_SKIA_COMPONENTS`가 그
 목록이고 `scripts/verify_skia_root.ps1`이 같은 목록을 검사한다.
@@ -254,6 +292,9 @@ ninja -C third_party\skia\out\skia-ui-release skia
 | `wuffs.lib` | gif 디코더다 |
 | `libpng.lib`·`zlib.lib` | 기본(libpng) png 구성만 낸다 |
 | `librust_png_ffi_rs.a`·`libcxx_cc.a` | `-RustPng` 구성만 낸다. bazel 산출물이라 확장자가 `.a`다 |
+
+기능별 아카이브(SVG·텍스트·Skottie·AVIF)는 이 목록에 들지 않는다 — 쓰는 소비자만
+더한다 (6장).
 
 ### 5.1 toolset과 Skia 빌드의 관계
 
@@ -501,57 +542,280 @@ scripts\bench_skia.ps1 -Configuration Release
 근사다. 프리멀티와 SrcOver처럼 그 연산이 겹치는 자리에서 최대 2가 난다. 실측에서
 색 공간 변환(Display P3 → sRGB)과 디코딩 결과는 **바이트까지 같았다.**
 
-### 5.5 알려진 구멍: rust png 인코더가 아카이브에 없다 (2026-09-11 실측)
+### 5.5 rust png 인코더가 Windows 아카이브에 없었다 (2026-09-11 실측, r3에서 풀림)
 
-`args.gn`에 `skia_use_rust_png_encode = true`가 있는데도 `SkPngRustEncoder::Encode`가
-`skia.lib`에 들어가지 않는다. 부르면 LNK2019가 난다.
+r2까지 `args.gn`에 `skia_use_rust_png_encode = true`가 있는데도 `SkPngRustEncoder::Encode`가
+`skia.lib`에 들어가지 않았다. 부르면 LNK2019가 났다.
 
 Skia 152의 `BUILD.gn`에서 `:png_encode_rust`를 deps에 넣는 target이 `optional("xml")`
-하나뿐이고(legacy SVG factory를 위한 자리다), 이 저장소는 `skia_use_expat = false`·
-`skia_use_jpeg_gainmaps = false`로 그 target을 끈다. libpng 쪽(`:png_encode_libpng`)은
-`:skia` component가 직접 들고 있어 대칭이 아니다.
+하나뿐이고(legacy SVG factory를 위한 자리다), r2는 `skia_use_expat = false`로 그 target을
+껐다. libpng 쪽(`:png_encode_libpng`)은 `:skia` component가 직접 들고 있어 대칭이
+아니다. upstream의 `chrome/m153`·`chrome/m154`·`main`도 같다 (2026-09-11에 읽어 확인).
 
-**도구사슬과 무관하다.** MSVC로 세운 것과 clang-cl로 세운 것에서 똑같이 비어 있는
-것을 확인했다. luil이 png를 인코딩하지 않으므로 지금 막히는 자리는 없고, 필요해질
-때 `:skia`의 deps에 한 줄을 더하는 패치로 푼다.
+**r3에서는 풀렸다.** SVG의 XML 파서 때문에 Windows도 `skia_use_expat = true`를 켜고
+(6장), 그것이 `:xml`을 켜서 `:png_encode_rust`가 함께 들어온다. Android는 처음부터
+그랬다 (시스템 폰트를 읽는 데 expat을 쓴다). 들어온 것은 skia.lib의 오브젝트 열둘
+— rust png 인코더 셋, expat 셋, `SkXMLParser`·SVG canvas·XMP 여섯 — 이고, 모두
+**부를 때만 링크된다.** 기존 목록만 링크한 소비자의 실행 파일은 r2와 크기가 같다 (6.6).
 
-**뒷 판번에서도 그대로다** (2026-09-11에 upstream의 `BUILD.gn`을 직접 읽어 확인했다).
-`chrome/m153`·`chrome/m154`·`main` 모두 `skia_component("skia")`의 deps에
-`:png_decode_rust`는 있고 `:png_encode_rust`는 없다 — 디코더 쪽만 대칭이 맞춰져
-있다. 버전을 올린다고 저절로 풀리지 않으므로, 그때 다시 뒤지지 않도록 적어 둔다.
+## 6. 기능별 아카이브 — SVG·텍스트·Skottie·AVIF (2026-10-20)
 
-**Android 갈래에서는 이 구멍이 없다** (2026-10-02 실측). 시스템 폰트를 읽으려고
-`skia_use_expat = true`를 켜는데, 그것이 바로 `:xml`을 켜서 `:png_encode_rust`가
-함께 들어온다. `libskia.a`에 `SkPngRustEncoder::Encode`가 정의돼 있고, Android용
-시험 프로그램(`tools/android_probe.cpp`)이 그것을 불러 링크된다. 같은 심볼이 rust
-아카이브에 함께 담긴 Skia 오브젝트에서 온 것이 아님도 `llvm-nm`으로 확인했다.
-Windows 갈래만의 구멍이라는 뜻이다. Windows에서 expat을 켜서 풀지는 않는다 —
-쓰지 않는 xml 파서와 그 고지를 들이게 된다.
+r3(win-x64)·r2(android-arm64)부터 패키지에 기능이 넷 더 든다. 원칙은 하나다.
 
-## 6. 텍스트 처리 구성 (선택)
+> **기능을 쓰지 않는 소비자는 링크도 실행 파일 크기도 그대로다.**
 
-현재 luil은 `drawSimpleText`와 `measureText`만 사용해 shaping engine이 필요하지 않다. `SkShaper`나 `SkParagraph`를 도입할 때 이 구성을 쓴다.
+그래서 새 기능은 모두 **기존 아카이브와 떨어진 아카이브**로 나온다. 기존 목록(core)만
+링크하는 소비자는 새 아카이브 없이 그대로 링크되고, 실행 파일이 r2/r1과 바이트 수까지
+같다 (6.6). 기능을 쓰는 소비자는 그 기능의 아카이브를 더한다. 목록의 원본은
+`third_party/features.json`이고, 패키지의 `NOTICE.json`이 같은 표를 싣는다.
 
-`third_party/skia-args/skia-ui-release-text.gn`이 `skia_use_harfbuzz = true`와 `skia_use_libgrapheme = true`를 켠 변형이다. submodule 셋을 추가로 받는다.
+### 6.1 기능 표
 
-```powershell
-git submodule update --init third_party/skia-externals/harfbuzz
-git submodule update --init third_party/skia-externals/libgrapheme
-git submodule update --init third_party/skia-externals/unicodetools
-git submodule update --init third_party/skia-externals/icu
+| 기능 | win-x64 | android-arm64 | 기능 의존 | 소비자 정의 |
+| --- | --- | --- | --- | --- |
+| core | (5장의 목록, 그대로) | (8.4의 목록, 그대로) | — | 그대로 |
+| svg | `svg.lib` `skshaper.lib` `skresources.lib` | `libsvg.a` `libskshaper.a` `libskresources.a` | core | 없음 |
+| text | `skparagraph.lib` `skshaper.lib` `skunicode_icu.lib` `skunicode_core.lib` `harfbuzz.lib` | `libskparagraph.a` `libskshaper.a` `libskunicode_icu.a` `libskunicode_core.a` `libharfbuzz.a` | core | 아래 다섯 |
+| skottie | `skottie.lib` `sksg.lib` `jsonreader.lib` `skresources.lib` `skshaper.lib` | `libskottie.a` `libsksg.a` `libjsonreader.a` `libskresources.a` `libskshaper.a` | core | 없음 |
+| avif | `avif_decoder.lib` `libavif.lib` `libgav1.lib` `libyuv.lib` | `libavif_decoder.a` `libavif.a` `libgav1.a` `libyuv.a` | core | 없음 (등록, 6.3) |
+| png·jpeg 인코드 | core에 있다 | core에 있다 | — | 없음 |
+
+- **시스템 라이브러리는 새로 들지 않는다.** text의 ICU는 실행 시점에 연다 —
+  Windows는 `LoadLibraryExW`(System32의 `icu.dll`), Android는 `dlopen`(`libicu.so`).
+  import 라이브러리도, `-licu`도 없다.
+- svg와 skottie가 공유하는 `skshaper`·`skresources`는 한 번만 링크하면 된다.
+  skottie는 skshaper 없이 링크되지 않는다 (실측). svg는 이 시험에서 `skresources`
+  없이도 섰지만, `SkSVGDOM.h`가 그 헤더를 열고 `DataURIResourceProviderProxy` 같은
+  것을 쓰면 필요하므로 목록에 둔다.
+- **텍스트의 소비자 정의**: `SK_SHAPER_PRIMITIVE_AVAILABLE`,
+  `SK_SHAPER_HARFBUZZ_AVAILABLE`, `SK_SHAPER_UNICODE_AVAILABLE`, `SK_UNICODE_AVAILABLE`,
+  `SK_UNICODE_ICU_IMPLEMENTATION`. skshaper·skunicode의 public_config가 붙이는 것과 같고,
+  `SkShaper.h`와 `FactoryHelpers.h`가 이것으로 선언을 가른다. **클래스 배치는 바꾸지
+  않는다** — 텍스트를 쓰지 않는 소비자는 주지 않아도 된다. 레거시 SkShaper 함수를 끄는
+  `SK_DISABLE_LEGACY_SKSHAPER_FUNCTIONS`는 **주지 않는다** — SkShaper의 순수 가상
+  함수를 없애 vtable이 바뀐다.
+- Windows의 `expat.lib`는 싣지 않는다. 같은 오브젝트가 skia.lib 안에 있다
+  (skia.lib는 complete static library라 의존하는 external을 담는다 — libjpeg·libwebp·
+  wuffs도 그렇다). SVG의 XML 파서는 그쪽에서 링크된다.
+
+새 공개 헤더는 패키지 루트에서 같은 상대 경로다: `modules/{svg,skshaper,skunicode,
+skparagraph,skottie,sksg,skresources}/include/`와 `modules/skshaper/utils/FactoryHelpers.h`.
+그 헤더들은 Skia 내부 헤더를 연다 — `SkSVGDOM.h`가 `SkSVGIDMapper.h`를 거쳐
+`src/core/SkTHash.h`를, skottie의 `TextShaper.h`가 `modules/skottie/src/text/*.h`를.
+`pack_skia.ps1`이 include를 따라가 그 열하나를 함께 싣는다. 인코더·AVIF의 헤더
+(`include/encode/`, `include/codec/SkAvifDecoder.h`)는 원래 `include/`에 있었다.
+
+### 6.2 링크 순서
+
+- **Windows**: `link.exe`는 순서를 보지 않는다. core 목록 뒤에 기능 아카이브를 더하면 된다.
+- **Android**: `libskia.a`가 맨 앞인 계약(8.5)은 그대로다. 기능 아카이브는 그 뒤 어디든
+  된다 — 다른 아카이브와 겹치는 정의가 없다 (`module-archives` 패치, 아래). 실측한
+  순서는 core(rust 둘 제외) → 기능 아카이브(`features.json`의 순서) → rust 둘이다.
+  lld는 아카이브를 한 번에 훑지 않으므로 순서는 겹치는 정의 중 어느 것이 쓰이는가만
+  정한다.
+
+  ```
+  libskia.a libskcms.a libjpeg*.a libwebp*.a libwuffs.a libfreetype2.a libexpat.a libpng.a
+  libzlib.a libcpu-features.a  <기능 아카이브>  librust_png_ffi_rs.a libcxx_cc.a
+  -Wl,--allow-multiple-definition -landroid -llog
+  ```
+
+`module-archives` 패치가 없던 첫 빌드에서는 `skia_component`(complete static library)가
+의존하는 것을 모두 빨아들였다 — skshaper·skparagraph가 HarfBuzz 오브젝트 76개를,
+svg·sksg·skottie가 `:pathops`를 통해 skia의 core 오브젝트 약 300개를. 같은 오브젝트라
+링크는 되지만 "어느 아카이브가 무엇을 담는가"가 흐려져 기능별로 떼는 표가 성립하지
+않는다. 패치가 모듈에 `complete_static_lib = false`를 주고 `:pathops` 의존을 뺀다. 대신
+`:skia`가 pathops를 직접 담는다. 그전에는 Windows 전용인 `:xps`를 통해서만 들어와,
+**Android r1의 `libskia.a`에는 `SkPathOps`의 정의가 없었다** (`Op()`를 부르면 링크가
+깨졌다). 이제 두 대상 모두에 있고, 부를 때만 링크된다.
+
+### 6.3 AVIF — 기본 디코더 목록에 없다
+
+백엔드는 **libavif + libgav1(AV1 디코더) + libyuv**다. 이 commit의 Skia에서 독립
+빌드로 설 수 있는 것이 이것뿐이다 — dav1d는 트리에 없고, CrabbyAvif(Rust)는 Skia가
+Android 프레임워크 빌드에서만 연다 (`BUILD.gn`의 주석). 시스템 의존성은 없다.
+
+`skia_use_libavif = true`로 켜면 `SK_CODEC_DECODES_AVIF`가 skia의 public define이 되고,
+`SkCodec.cpp`가 기본 디코더 목록에 AVIF를 넣는다. 그러면 AVIF를 쓰지 않는 소비자도
+세 라이브러리를 링크해야 한다. 그래서 그 인자는 끄고, `separable-avif` 패치의
+`skia_prep_avif_archive`로 같은 소스(`SkAvifCodec.cpp`)를 `avif_decoder`에 따로 세운다.
+**쓰는 소비자가 고른다.** 둘 중 하나다.
+
+```cpp
+#include "include/codec/SkAvifDecoder.h"
+
+// 1. 등록한다. 이후의 SkCodec::MakeFromData/MakeFromStream이 AVIF를 읽는다.
+//    thread-safe가 아니므로 첫 디코드 전에 한 번 부른다.
+SkCodecs::Register(SkAvifDecoder::LibAvif::Decoder());
+
+// 2. 디코더 목록을 넘긴다. 전역 상태를 바꾸지 않는다.
+const SkCodecs::Decoder decoders[] = {SkAvifDecoder::LibAvif::Decoder()};
+std::unique_ptr<SkCodec> codec = SkCodec::MakeFromData(data, decoders);
 ```
 
-full ICU(`skia_use_icu = true`)는 쓰지 않는다. Skia의 번들 ICU는 Windows에서만 `icudtl.dat`를 실행 파일 옆에서 런타임에 읽어, 단일 `.exe` 원칙과 충돌한다. `libgrapheme` backend는 데이터 파일을 만들지 않는다.
+애니메이션 AVIF는 SkCodec의 여러 프레임 API로 읽힌다 — `getFrameCount()`,
+`getFrameInfo()`(프레임마다 `fDuration`), `Options::fFrameIndex`. 3프레임 100 ms
+시험 파일이 두 대상에서 프레임 수·시간·색까지 맞았다. 디코드만 넣었다 (인코더 없음).
 
-다만 libgrapheme backend도 BiDi는 ICU **소스** 20여 개 파일을 컴파일하므로 `icu` submodule은 필요하다. 데이터 파일은 쓰지 않는다.
+### 6.4 텍스트 — HarfBuzz와 시스템 ICU
 
-`unicodetools`는 libgrapheme의 표 생성에만 쓰이며 작업 트리가 3.1 GB다. 실제로 읽는 것은 `unicodetools/data/ucd/15.0.0`(52 MB)뿐이므로 sparse-checkout을 권한다.
+모양 잡기는 HarfBuzz(`SkShapers::HB`), 유니코드 처리(줄 나눔·글자소·bidi·문자 체계)는
+SkUnicode의 ICU 갈래, 문단은 SkParagraph다. **ICU는 실행 시점에 플랫폼의 것을 연다**
+(`skia_use_runtime_icu`). ICU를 컴파일하지도, 데이터(`icudtl.dat` 수십 MB)를 싣지도
+않는다. icu external은 헤더로만 쓴다.
 
-```powershell
-git -C third_party\skia-externals\unicodetools sparse-checkout set unicodetools/data/ucd/15.0.0
+Skia의 runtime 로더는 그대로는 쓸 수 없었다. `libicuuc.so`를 열고 판번이 붙은 이름
+(`u_errorName_74`)만 찾는데, Android 앱은 `libicuuc.so`를 열 수 없고(NDK 라이브러리가
+아니다), Windows에는 로더 자체가 없었다(`BUILD.gn`이 Android·Linux에만 연다).
+`runtime-icu-system` 패치가 이것을 고친다.
+
+| 플랫폼 | 여는 것 | 이름 | 최소 |
+| --- | --- | --- | --- |
+| Windows | System32의 `icu.dll`, 없으면 `icuuc.dll` | 판번 없음 | `icu.dll`은 Windows 10 1903, `icuuc.dll`은 1703 |
+| Android | `libicu.so` (NDK의 ICU4C) | 판번 없음 | **API 31 (Android 12)** |
+| Linux | `libicuuc.so` | 판번 붙음 | (Skia 원래의 길) |
+
+- 필요한 함수 29개와 선택 셋을 이름으로 찾는다. 이 기계의 `icu.dll`(ICU 72)에는 서른셋
+  모두, NDK r27d의 `libicu.so` 스텁에는 필요한 29개와 `ubrk_clone`이 있다
+  (`ubrk_safeClone`·`ubrk_getLocaleByType`은 없다 — 로더는 clone 둘 중 하나면 된다).
+  필요한 것이 하나라도 없으면 그 라이브러리를 닫고 다음을 본다.
+- **어느 것도 열리지 않으면 `SkUnicodes::ICU::Make()`가 nullptr을 돌려준다.** 소비자는
+  그때 primitive shaper로 물러선다 (`SkShapers::Primitive::Factory()`). 복잡한 문자
+  체계와 bidi가 빠지고, 글자마다 cmap 글리프 하나가 된다.
+- **Android의 `ndk_api`는 26 그대로다.** `libicu.so`를 링크하지 않고 `dlopen`하므로
+  minSdk 26에서 실행 파일은 돈다. ICU 모양 잡기는 Android 12 이상에서만 켜지고, 그
+  아래에서는 위의 물러서기다. 기기 시험은 Android 12 이상에서만 했다 — 그 아래에서
+  nullptr로 물러서는 길은 코드로만 확인했다.
+
+SVG의 `<text>`와 Skottie의 텍스트 레이어는 기본이 primitive shaper다 (svg.lib·
+skottie.lib이 HarfBuzz를 참조하지 않게 하려는 것이다 — 그래야 svg만 쓰는 소비자가
+텍스트 아카이브 없이 링크된다). HarfBuzz로 모양 잡으려면 소비자가 공장을 넘긴다.
+
+```cpp
+#include "modules/skshaper/utils/FactoryHelpers.h"   // 텍스트 정의 다섯이 필요하다
+#include "modules/skunicode/include/SkUnicode_icu.h"
+
+sk_sp<SkUnicode> unicode = SkUnicodes::ICU::Make();
+sk_sp<SkShapers::Factory> shaping = unicode
+        ? sk_make_sp<SkShapers::HarfbuzzFactory>(unicode)
+        : SkShapers::Primitive::Factory();
+SkSVGDOM::Builder().setFontManager(fonts).setTextShapingFactory(shaping) /* ... */;
+skottie::Animation::Builder().setFontManager(fonts).setTextShapingFactory(shaping) /* ... */;
 ```
 
-`icu`만 GitHub 대응물이 없어 `chromium.googlesource.com/chromium/deps/icu`를 원격으로 쓴다. 접근이 막히면 브라우저로 `+archive/<commit>.tar.gz`를 받아 풀거나, GN 인자인 `skia_icu_bidi_third_party_dir`을 `github.com/unicode-org/icu`를 가리키는 자체 `BUILD.gn`으로 바꾼다.
+이 길을 쓰려고 `skshaper-legacy-split` 패치가 든다. 옛 SkShaper 함수(`SkShaper::Make`
+등)가 HarfBuzz·SkUnicode를 부르는데, SVG가 부르는 `MakeFontMgrRunIterator`와 한
+오브젝트(`SkShaper.cpp`)에 있어서, SVG만 쓰는 소비자도 그 오브젝트를 끌어오며 텍스트
+아카이브를 요구했다. 옛 함수를 다른 파일로 옮겼다. 코드는 그대로다.
+
+**실측 (2026-10-20, 두 대상 Release·Debug).**
+
+| 시험 | Windows 11 | Android (arm64 실기기, Android 12 이상) |
+| --- | --- | --- |
+| 아랍어 سلام — RTL, 이어 쓰기(어두형 ≠ 독립형) | 글리프 4, 클러스터 4 | 글리프 3 (lam-alef 합자), 클러스터 3 |
+| 힌디어 कि — 모음 기호가 자음 앞으로, 한 클러스터 | 글리프 2, 클러스터 1 | 같다 |
+| ZWJ 👩‍💻 | 글리프 1, 클러스터 1 | 같다 |
+| ZWJ 가족 👨‍👩‍👧‍👦 | **글리프 4** (글꼴에 합자가 없다) | 글리프 1, 클러스터 1 |
+| 옛한글 ᄒᆞᆫ (조합형 자모 셋) | Noto Sans KR로 클러스터 1. **Windows 기본 한글 글꼴로는 3** | 시스템 대체 글꼴로 클러스터 1 |
+| SkParagraph RTL 문단, 시작 정렬 | 오른쪽에 붙는다 | 같다 |
+
+판정이 갈린 둘은 **글꼴 데이터의 한계**다. 같은 Segoe UI Emoji에서 👩‍💻·🏳️‍🌈은 한
+글리프이므로 HarfBuzz의 ZWJ 경로는 돈다. 맑은 고딕·바탕·굴림·돋움·궁서는 옛한글 자모
+글리프는 있어도 조합(ljmo·vjmo·tjmo)이 없다. 그리고 **SkShaper에 기본 글꼴만 주면**
+`MakeFontMgrRunIterator`가 대체 글꼴을 글자 단위로 골라, 기본 글꼴에도 있는 ZWJ나
+자모가 다른 run으로 떨어져 묶이지 못한다. 글자소 단위로 고르는 SkParagraph는 기본
+글꼴에서 시작해도 묶는다. SkShaper를 직접 쓸 때는 그 글자를 가진 글꼴을 준다.
+
+### 6.5 인코더 — 부를 때만 링크된다
+
+- **png**: rust 인코더(`SkPngRustEncoder`)다. 이 commit에 `skia_use_rust_png_encode`가
+  있고 r2부터 켜져 있었지만 Windows 아카이브에 빠져 있었다 (5.5). 이제 두 대상 모두
+  skia.lib·libskia.a에 있다. 인코더의 rust 쪽은 r2의 rust 아카이브에도 이미 있었다
+  (cxx 브리지 심볼 131개가 r2와 r3에서 같다). 빠졌던 것은 C++ 쪽 오브젝트 셋이다.
+- **jpeg**: libjpeg-turbo 인코더(`SkJpegEncoder`)다. `skia_use_libjpeg_turbo_encode`도
+  r2부터 켜져 있었다.
+- webp 인코더(luil이 화면 캡처에 쓴다)는 그대로다.
+
+부르지 않는 소비자의 실행 파일에는 들어오지 않는다 — base의 링크 맵에 인코더 표지가
+없고 크기가 r2와 같다. 부르면 아래만큼 는다 (Release).
+
+### 6.6 크기
+
+소비자 실행 파일 (`scripts/probe_features.ps1`, 기존 목록만 링크한 base 대비).
+Windows는 MSVC `/O2 /MT`, Android는 NDK clang `-O2`, 둘 다 strip하지 않은 크기다.
+
+| 갈래 | win-x64 Release | android-arm64 Release | win-x64 Debug | android-arm64 Debug |
+| --- | ---: | ---: | ---: | ---: |
+| base (r2/r1 패키지로 링크) | 3,799,552 | 9,052,224 | 18,993,664 | 28,902,064 |
+| base (이 패키지) | **3,799,552** | **9,052,224** | **18,993,664** | 28,902,000 |
+| + png 인코드 | +132,608 | +42,272 | +82,432 | +215,360 |
+| + jpeg 인코드 | +273,920 | +295,624 | +397,312 | +625,608 |
+| + svg | +593,408 | +899,272 | +1,582,080 | +4,096,144 |
+| + text | +1,142,272 | +2,165,816 | +2,503,168 | +11,287,296 |
+| + avif | +1,965,056 | +2,367,112 | +3,233,792 | +6,531,208 |
+| + skottie | +654,848 | +1,268,496 | +2,133,504 | +6,703,008 |
+| + svg + text | +1,693,696 | +2,811,344 | +4,003,840 | +14,612,104 |
+| + skottie + text | +1,757,696 | +3,180,392 | +4,553,216 | +17,184,960 |
+
+Android Debug base의 64바이트는 소비자 쪽 디버그 정보에 실리는 include 경로의 길이다.
+strip하면 두 패키지가 바이트 수까지 같다 (12,879,448). Android의 svg·text·skottie
+갈래에는 expat 표지가 보이는데, Android에서 글꼴 관리자(`SkFontMgr_android`)가
+`fonts.xml`을 expat으로 읽기 때문이다 — core의 몫이다.
+
+패키지 zip은 판번 표에 있다 (publishing.md 4장).
+
+### 6.7 Release 심볼 자산 (win-x64)
+
+`...-release-symbols.zip`은 Release를 `/Z7`로 세운 **같은 코드의 아카이브**다. 기본
+zip 대신 받으면 소비자가 `/DEBUG`로 링크할 때 Skia의 심볼이 PDB에 들어간다.
+`/DEBUG` 없이 링크한 실행 파일은 기본 Release와 크기까지 같았다 (base·svg·text).
+rust 아카이브 둘은 기본 zip과 같은 것(디버그 정보를 걷은 것)이다 — 걷지 않으면
+Bazel 출력 경로에 사용자 이름이 실린다 (8.7).
+
+```powershell
+scripts\build_skia.ps1 -Configuration Release -RustPng -DebugInfo -OutputSuffix '-sym'
+scripts\pack_skia.ps1 -Configuration Release -OutputSuffix '-sym' `
+    -Destination build\skia-package-symbols -Archive -ArchiveSuffix '-symbols'
+```
+
+비용은 빌드 1분 45초(32코어)와 GN 아카이브 88 MB → 354 MB다. zip 크기는 판번 표에
+있다. Android에는 내지 않는다.
+
+### 6.8 고지 — NOTICE.json
+
+`NOTICE.md`는 패키지에 든 모든 것의 고지다. 기능을 옵션으로 빼는 앱이 뺀 기능의
+고지까지 싣지 않도록, `NOTICE.json`이 둘을 적는다.
+
+- `libraries`: 아카이브마다 **담긴** 구성요소. `pack_skia.ps1`이 멤버를 하나씩 걸어
+  GN 대상 이름(오브젝트 이름의 첫 마디)으로 가른다. 손으로 적지 않는다.
+- `features`: 그 기능을 쓸 때 실행 파일에 **들어오는** 구성요소. `features.json`이
+  적고, `probe_features.ps1`이 링크 맵의 표지로 확인한다.
+
+둘은 다를 수 있다. Windows의 skia.lib는 expat을 담지만, expat은 SVG의 XML 파서로만
+링크되므로 `features.svg`에 붙는다. 앱이 실을 것은 쓰는 기능들의 `features.*.notices`의
+합이다 (core는 언제나). 새로 든 고지는 HarfBuzz(Old MIT), ICU(Unicode License V3 —
+컴파일한 헤더의 몫), libavif(BSD-2), libgav1(Apache-2.0), libyuv(BSD-3 + 특허 허여),
+그리고 Windows의 Expat(MIT)이다.
+
+### 6.9 확인하는 법
+
+```powershell
+scripts\probe_features.ps1 -PackageRoot build\skia-package -Configuration Release `
+    -BaselineRoot <r2 패키지를 푼 자리>
+```
+
+`tools/feature_probe.cpp`를 기능마다 다른 매크로로 컴파일하고, 그 기능의 아카이브만
+더해 링크한다. 링크가 서면 목록이 충분한 것이고, 링크 맵에 남은 표지(HarfBuzz·expat·
+AVIF·인코더)가 부르지 않은 것이 들어오지 않았음을 말한다. Windows에서는 MSVC로
+세워 돌리고, `d3d` 갈래가 Direct3D 12로 그려 되읽는다. Android(WSL, `-Target
+android-arm64`)에서는 세우기만 하고 adb로 기기에서 돌린다 — 실행 파일 하나로 돈다
+(시험 이미지가 박혀 있다, `tools/make_probe_assets.py`). `-Without <아카이브>`로 하나를
+빼고 링크해 정말 필요한지 볼 수 있다.
+
+기존 기능은 두 길로 본다. Windows는 `bench_skia.ps1`로 r2와 맞대어 픽셀이 바이트까지
+같고 시간도 같았다 (r2 Release 아카이브를 같은 루트의 `out/skia-ui-release-r2`에 두고
+`-Baseline '-r2' -Candidate ''`). Android는 `tools/android_probe.cpp`를 새 패키지의 core
+목록으로 링크해 기기에서 넷(래스터·rust png·시스템 글꼴·Vulkan)을 통과했다.
 
 ## 7. Skia 버전 갱신
 
@@ -564,6 +828,10 @@ git -C third_party\skia-externals\unicodetools sparse-checkout set unicodetools/
 - `scripts/verify_skia_root.ps1`의 `$minimum_milestone`
 - `scripts/pack_skia.ps1`의 `$package_revisions` — 대상마다 따로 세며, commit이 바뀌면 모두 1로 되돌린다 (5.4)
 - `third_party/rust-licenses/<대상>` — crate 목록이 바뀌면 대상마다 다시 뜬다 (8.4)
+- `third_party/features.json` — 기능별 아카이브의 이름이 그대로인지. `probe_features.ps1`을
+  두 대상·두 구성에서 돌려 확인한다 (6.9)
+- 모듈 패치 넷이 여전히 필요한지 — upstream이 AVIF를 기본 목록에서 빼거나, 옛 SkShaper
+  함수를 옮기거나, runtime ICU 로더가 `libicu.so`·`icu.dll`을 알게 되면 그 패치는 빠진다
 
 갱신 후에는 configure, 빌드, 전체 CTest, 한국어와 Codicon 렌더링 육안 검증을 모두 수행한다.
 
@@ -581,10 +849,9 @@ git -C third_party\skia-externals\unicodetools sparse-checkout set unicodetools/
 
 갱신하며 얻은 것은 rust png다 — 148에서는 어떤 길로도 서지 않았다 (5.3).
 
-**`icu`는 핀만 맞추고 빌드하지 않았다.** text 구성(6장)은 이 저장소가 아직 쓰지 않아
-submodule이 초기화되어 있지 않다. 그래도 맞춰 두는 이유는 m152의
-`third_party/icu/icu.gni`가 `common/fixedstring.cpp`·`.h`를 새로 요구해 **옛 핀으로는
-그 구성이 깨지기** 때문이다 — 쓰기 시작하는 날 원인을 다시 찾지 않게 한다.
+**`icu`는 그때 핀만 맞추고 빌드하지 않았다.** m152의 `third_party/icu/icu.gni`가
+`common/fixedstring.cpp`·`.h`를 새로 요구해 옛 핀으로는 ICU를 소스째 세우는 구성이
+깨지기 때문이었다. 지금(6.4)은 ICU를 헤더로만 쓴다.
 
 ## 8. Android 대상 (2026-10-02)
 
@@ -619,8 +886,8 @@ Skia 본체(GN 쪽)는 Windows 호스트의 NDK로도 선다 (`gn/BUILDCONFIG.gn
 NDK를 찾는 순서는 `-NdkPath`, `ANDROID_NDK_HOME`, `ANDROID_NDK_ROOT`,
 `third_party/skia-tools/ndk`, `~/ndk/android-ndk-r27d`다. r27이 아니면 경고만 한다.
 
-submodule은 Windows의 셋(D3D12MA·SPIRV 둘) 대신 아래를 받는다. 셋은 DEPS의
-commit에 고정한 GitHub 원본이다.
+submodule은 Windows의 셋(D3D12MA·SPIRV 둘) 대신 앞의 셋을 받는다. 셋은 DEPS의
+commit에 고정한 GitHub 원본이다. 뒤의 다섯은 기능별 아카이브(6장)의 것으로 Windows와 같다.
 
 ```bash
 git submodule update --init third_party/skia
@@ -632,7 +899,16 @@ git submodule update --init third_party/skia-externals/libwebp
 git submodule update --init third_party/skia-externals/wuffs
 git submodule update --init third_party/skia-externals/libpng
 git submodule update --init third_party/skia-externals/zlib
+git submodule update --init third_party/skia-externals/harfbuzz
+git submodule update --init third_party/skia-externals/icu
+git submodule update --init third_party/skia-externals/libavif
+git submodule update --init third_party/skia-externals/libgav1
+git submodule update --init third_party/skia-externals/libyuv
 ```
+
+WSL 클론의 submodule이 `/mnt/e`의 체크아웃을 가리키게 해 두었다면, 새 git은 로컬 경로
+전송을 막는다 (`fatal: transport 'file' not allowed`). 전역 설정을 바꾸지 않고 그
+명령에만 허용한다: `git -c protocol.file.allow=always submodule update --init …`.
 
 `libpng`·`zlib`은 **rust 갈래여도 필요하다.** freetype이 컬러 이모지 때문에 libpng을,
 libpng이 zlib을 끌어온다 (`third_party/freetype2/BUILD.gn`). 코덱이 아니라 freetype의
@@ -662,6 +938,10 @@ submodule로 다시 받은 저장소 — 에서 이 다섯 줄이 패치를 걸�
 | --- | --- | --- |
 | `...-r1-android-arm64-release.zip` | 16.3 MB | 54 MB |
 | `...-r1-android-arm64-debug.zip` | 48.1 MB | 225 MB |
+| `...-r2-android-arm64-release.zip` (기능별 아카이브를 더한 판번) | 21.3 MB | 71 MB |
+| `...-r2-android-arm64-debug.zip` | 66.9 MB | 327 MB |
+
+r2의 두 구성 빌드는 각각 39초였다 (32코어, Bazel 캐시가 데워진 상태).
 
 rust 아카이브(`librust_png_ffi_rs.a`)가 크기의 대부분이다. 빌드 자리에서는 Release
 196 MB인데 대부분이 디버그 정보라, 걷어 내고 실으면 줄어든다 (8.7).
@@ -682,6 +962,7 @@ rust 아카이브(`librust_png_ffi_rs.a`)가 크기의 대부분이다. 빌드 �
 | 글꼴 | DirectWrite | freetype + expat (`SkFontMgr_android`가 `/system/etc/fonts.xml`을 읽는다) |
 | 컴파일러 | clang-cl, `clang_win` | NDK r27d의 clang, `ndk` |
 | 하한 | — | `ndk_api = 26` (Android 8.0). 소비자의 minSdkVersion 하한이다 |
+| 텍스트의 ICU | System32의 `icu.dll` (Windows 10 1903+) | NDK의 `libicu.so` (**Android 12, API 31+**). `dlopen`하므로 `ndk_api`는 그대로다 (6.4) |
 
 `skia_use_perfetto`·`skia_use_ndk_images`는 기본값이 `is_android`라 저절로 켜지므로
 끈다. 뒤엣것은 `ndk_api >= 30`에서 png·jpeg 디코드를 플랫폼 코덱으로 바꾼다.
@@ -717,10 +998,12 @@ crate가 선다. lock에서 달라진 것은 crate 확장의 항목 하나뿐이
    `libskia.a`와 겹치고, lld는 그것을 오류로 본다. Skia의 `BUILD.gn`도
    `rust_ffi_libs_config`에서 같은 플래그를 요구한다. 먼저 찾은 정의가 쓰이므로
    **`libskia.a`를 앞에 둔다.** (Windows의 `link.exe`는 같은 겹침을 조용히 넘긴다.
-   그래서 Windows 패키지에서는 드러나지 않았다.)
+   그래서 Windows 패키지에서는 드러나지 않았다.) 기능별 아카이브는 그 뒤 어디든
+   된다 — 겹치는 정의가 없다. 실측한 순서는 core(rust 둘 제외) → 기능 → rust 둘이다 (6.2).
 2. **`-landroid -llog`를 링크한다.** 앞엣것은 `AHardwareBuffer`(Vulkan), 뒤엣것은
    Skia의 로그다. 빼면 링크가 깨진다. 그 밖에 요구하는 시스템 라이브러리는
-   `libm`·`libdl`·`libc`뿐이다.
+   `libm`·`libdl`·`libc`뿐이다. 기능별 아카이브는 새 시스템 라이브러리를 요구하지
+   않는다 — 텍스트의 ICU는 `dlopen`으로 연다.
 3. **Vulkan 메모리 할당기를 직접 넘긴다.** M152의 `GrVkGpu`는 그것을 스스로 만들지
    않는다. 만드는 함수 `skgpu::VulkanMemoryAllocators::Make`는 내부 헤더
    (`src/gpu/vk/vulkanmemoryallocator/VulkanMemoryAllocatorPriv.h`)에만 선언돼 있어
@@ -759,6 +1042,11 @@ android_probe passed
 빌드 자리의 아카이브로 한 번, **패키지에 실린 아카이브**(디버그 정보를 걷은 것)로 한
 번 링크해 둘 다 돌렸다. Debug는 `SkASSERT`가 켜진 구성이라 하나라도 걸리면 거기서
 멈춘다. 기기 로그(`logcat`)에도 Skia의 경고가 없었다.
+
+r2에서는 기능 probe(6.9)도 기기에서 돌렸다. `probe_features.ps1 -Target android-arm64`가
+세운 열 갈래(base·인코더 둘·svg·text·avif·skottie·겹친 둘·r1로 링크한 base)와, r2
+패키지의 core 목록으로 다시 링크한 `android_probe`가 Release·Debug 모두 통과했다.
+기기는 Android 12 이상이라 텍스트의 시스템 ICU(`libicu.so`)가 열렸다.
 
 `adb`는 Windows 쪽에서 쓴다 (`winget install Google.PlatformTools`). WSL에서 USB를
 보려면 usbipd가 더 든다. 시험 파일은 `\\wsl.localhost\<배포판>\...`로 바로 올린다.

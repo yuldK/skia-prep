@@ -23,7 +23,15 @@ git submodule update --init third_party/skia-externals/libwebp
 git submodule update --init third_party/skia-externals/wuffs
 git submodule update --init third_party/skia-externals/libpng
 git submodule update --init third_party/skia-externals/zlib
+git submodule update --init third_party/skia-externals/expat
+git submodule update --init third_party/skia-externals/harfbuzz
+git submodule update --init third_party/skia-externals/icu
+git submodule update --init third_party/skia-externals/libavif
+git submodule update --init third_party/skia-externals/libgav1
+git submodule update --init third_party/skia-externals/libyuv
 ```
+
+뒤의 여섯은 기능별 아카이브(SVG·텍스트·Skottie·AVIF)의 것이다 (skia-build.md 6장).
 
 `gn`과 `ninja`는 `build_skia.ps1`이 알려진 자리에서 찾는다. 없으면 `-FetchTools`를
 주거나 `third_party/skia-tools/`에 넣는다.
@@ -71,6 +79,15 @@ scripts\bench_skia.ps1 -Configuration Release -Baseline '-msvc' -Candidate ''
 검사다 — 소비자는 MSVC로 빌드하기 때문이다. 픽셀 비교도 함께 본다
 (docs/skia-build.md 5.4).
 
+패키징한 뒤에는 **기능을 하나씩 떼어** 링크하고 돌린다. 기존 목록만 링크한 base가
+앞 판번과 같은 크기여야 하고, 기능마다 그 아카이브만 더해 링크·실행이 서야 한다
+(skia-build.md 6.9).
+
+```powershell
+scripts\probe_features.ps1 -PackageRoot build\skia-package -Configuration Release -BaselineRoot <앞 판번을 푼 자리>
+scripts\probe_features.ps1 -PackageRoot build\skia-package-debug -Configuration Debug -BaselineRoot <앞 판번 Debug>
+```
+
 ## 4. 패키징
 
 ```powershell
@@ -89,20 +106,25 @@ CPU 래스터 파이프라인이 SIMD 경로로 서는 것이다. 번호는 `pac
 
 | 대상 | 판번 | 무엇인가 |
 | --- | --- | --- |
-| `win-x64` | r3 | Debug의 디버그 정보에서 생산자 경로를 걷었다 (아래) |
+| `win-x64` | r3 | 기능별 아카이브(SVG·텍스트·Skottie·AVIF)와 Release 심볼 자산을 더했다. 그리고 Debug의 디버그 정보에서 생산자 경로를 걷었다 (아래) |
+| `android-arm64` | r2 | 기능별 아카이브(SVG·텍스트·Skottie·AVIF)를 더했다. `libskia.a`가 pathops를 담는다 |
 | `win-x64` | r2 | clang-cl로 세워 SIMD 경로로 선다 (r1은 MSVC). **Debug 자산에 사용자 이름이 실려 있다** |
 | `android-arm64` | r1 | 첫 Android 패키지 |
 
-r3은 기능이 r2와 같다 — 같은 시험 이미지 일곱 장의 픽셀이 바이트까지 같다. 그래서
-r2를 다시 내지는 않고, 다음에 발행할 이유가 생길 때 r3으로 낸다. 무엇을 막았는지는
-[skia-build.md](skia-build.md) 8.7에 있다.
+경로를 걷은 r3은 기능이 r2와 같아(시험 이미지 일곱 장의 픽셀이 바이트까지 같다)
+그것만으로는 다시 내지 않고, 기능별 아카이브와 함께 처음 낸다. 무엇을 막았는지는
+[skia-build.md](skia-build.md) 8.7에 있다. 기존 기능은 그대로다 — `bench_skia.ps1`로 r2와
+맞대어 픽셀이 바이트까지 같고, 기존 목록만 링크한 실행 파일이 r2와 같은 크기다.
 
 | 자산 | 압축 | 푼 뒤 |
 | --- | --- | --- |
-| `...-r3-win-x64-release.zip` | 19.6 MB | 70 MB |
-| `...-r3-win-x64-debug.zip` | 112.6 MB | 439 MB |
+| `...-r3-win-x64-release.zip` | 24.8 MB | 86 MB |
+| `...-r3-win-x64-debug.zip` | 157.9 MB | 605 MB |
+| `...-r3-win-x64-release-symbols.zip` | 87.8 MB | 352 MB |
 
-r2보다 작은 것은 rust 아카이브의 디버그 정보를 걷어 싣기 때문이다.
+기능 아카이브를 빼고 같은 것을 싼 r3(발행하지 않은 첫 r3 빌드)은 19.6 MB · 112.6 MB였다.
+늘어난 것이 기능별 아카이브와 모듈 헤더다. 심볼 자산은 **기본 zip과 따로** 올린다 —
+기본 내려받기 크기는 그대로다 (skia-build.md 6.7).
 
 실측 (Skia 152, r2):
 
@@ -225,12 +247,18 @@ pwsh scripts/pack_skia.ps1 -Target android-arm64 -Configuration Debug -Destinati
 `tools/android_probe.cpp`를 패키지에 링크해 `adb`로 올린다 (세우는 명령은 그 파일
 머리에 있다). 넷이 모두 `OK`여야 올린다.
 
-실측 (Skia 152, android-arm64 r1):
+**기능 probe도 기기에서 돌린다.** `probe_features.ps1 -Target android-arm64`가 기능마다
+실행 파일을 세우고(실행하지는 않는다), adb로 올려 돌린다. 시험 이미지가 박혀 있어 실행
+파일 하나로 돈다. r2는 android_probe와 기능 probe 열 갈래가 Release·Debug 모두 통과했다.
+
+실측 (Skia 152):
 
 | 자산 | 압축 | 푼 뒤 |
 | --- | --- | --- |
 | `skia-prep-0873ec164a06-r1-android-arm64-release.zip` | 16.3 MB | 54 MB |
 | `skia-prep-0873ec164a06-r1-android-arm64-debug.zip` | 48.1 MB | 225 MB |
+| `skia-prep-0873ec164a06-r2-android-arm64-release.zip` | 21.3 MB | 71 MB |
+| `skia-prep-0873ec164a06-r2-android-arm64-debug.zip` | 66.9 MB | 327 MB |
 
 **태그에 대상을 넣는다.** 판번을 대상마다 따로 세므로 `skia-152-0873ec164a06-r1`은
 Windows의 r1과 겹친다.
