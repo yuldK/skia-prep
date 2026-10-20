@@ -465,6 +465,109 @@ The static archive links the Rust standard library, so its notice is required.
     return "licenses/rust/$name"
 }
 
+# rust 아카이브에서 뺄 C/C++ 멤버를 고른다.
+#
+# Bazel의 rust_static_library는 rust 코드만이 아니라 그것이 의존하는 C++ 오브젝트까지
+# 담는다 — //rust/common:ffi_utils가 //:core를 끌어와 Skia core가 통째로 다시
+# 컴파일되어 들어 있다 (Skia 157 Android에서 650개, Windows에서 490개). 같은 정의가
+# libskia.a·skia.lib에 있으므로 Android 소비자는 --allow-multiple-definition을 줘야
+# 했고, 어느 정의가 쓰일지가 링크 순서에 달려 있었다 (docs/skia-build.md 8.5).
+#
+# 고르는 규칙 (멤버 단위, 기호표로만 판정한다):
+#   - rust 코드(*.rcgu.o)와 오브젝트가 아닌 멤버(Windows의 import 오브젝트)는 남긴다.
+#   - C/C++ 멤버는, 그것만 정의하는 전역 기호(강한 것이든 약한 것이든)를 남는 멤버나
+#     다른 아카이브의 누구도 찾지 않으면 뺀다. 다른 곳에도 있는 기호만 정의하는 멤버,
+#     그리고 아무도 찾지 않는 것(옛 libc++ 내부 같은)만 정의하는 멤버가 그것이다.
+#   - 남는 멤버가 찾는 기호를 뺀 멤버만 갖고 있으면 그 멤버를 되살린다 (고정점).
+# "다른 곳"은 패키지의 다른 아카이브와, Android에서는 소비자가 늘 링크하는 NDK의
+# libc++·libc++abi·compiler-rt builtins다.
+function Get-RedundantRustMembers {
+    param([string]$nm, [string]$archive, [string[]]$others)
+
+    $strong_kinds = 'TDBRSCG'
+    function Read-Symbols([string]$path, [string]$mode) {
+        $table = @{}
+        $prefix = $path + ':'
+        foreach ($line in (& $nm $mode '--extern-only' '--print-file-name' '--no-sort' $path 2>$null)) {
+            if (-not $line.StartsWith($prefix)) {
+                continue
+            }
+            $split = $line.LastIndexOf(': ')
+            if ($split -le $prefix.Length) {
+                continue
+            }
+            $member = $line.Substring($prefix.Length, $split - $prefix.Length)
+            $fields = $line.Substring($split + 2).Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+            if ($fields.Count -lt 2) {
+                continue
+            }
+            if (-not $table.ContainsKey($member)) {
+                $table[$member] = @{}
+            }
+            $table[$member][$fields[-1]] = $fields[-2]
+        }
+        return $table
+    }
+
+    $elsewhere = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $wanted_elsewhere = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($other in $others) {
+        foreach ($symbols in (Read-Symbols $other '--defined-only').Values) {
+            foreach ($name in $symbols.Keys) { [void]$elsewhere.Add($name) }
+        }
+        foreach ($symbols in (Read-Symbols $other '--undefined-only').Values) {
+            foreach ($name in $symbols.Keys) { [void]$wanted_elsewhere.Add($name) }
+        }
+    }
+    $defined = Read-Symbols $archive '--defined-only'
+    $undefined = Read-Symbols $archive '--undefined-only'
+    $members = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($key in @($defined.Keys) + @($undefined.Keys)) { [void]$members.Add($key) }
+
+    $removable = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($member in $members) {
+        if ($member.EndsWith('.rcgu.o') -or -not ($member.EndsWith('.o') -or $member.EndsWith('.obj'))) {
+            continue
+        }
+        if ($defined.ContainsKey($member)) {
+            [void]$removable.Add($member)
+        }
+    }
+    do {
+        $changed = $false
+        $wanted = [System.Collections.Generic.HashSet[string]]::new($wanted_elsewhere, [StringComparer]::Ordinal)
+        foreach ($member in $members) {
+            if (-not $removable.Contains($member) -and $undefined.ContainsKey($member)) {
+                foreach ($name in $undefined[$member].Keys) { [void]$wanted.Add($name) }
+            }
+        }
+        foreach ($member in @($removable)) {
+            foreach ($name in $defined[$member].Keys) {
+                if (-not $elsewhere.Contains($name) -and $wanted.Contains($name)) {
+                    [void]$removable.Remove($member)
+                    $changed = $true
+                    break
+                }
+            }
+        }
+    } while ($changed)
+
+    # 남는 멤버끼리, 그리고 다른 아카이브와 강한 정의가 겹치면 --allow-multiple-definition이
+    # 여전히 필요하다. 센 값을 돌려 패키징 로그에 남긴다.
+    $strong_duplicates = 0
+    foreach ($member in $members) {
+        if ($removable.Contains($member) -or -not $defined.ContainsKey($member)) {
+            continue
+        }
+        foreach ($entry in $defined[$member].GetEnumerator()) {
+            if ($strong_kinds.Contains($entry.Value) -and $elsewhere.Contains($entry.Key)) {
+                $strong_duplicates++
+            }
+        }
+    }
+    return [pscustomobject]@{ remove = $removable; kept = $members.Count - $removable.Count; strong_duplicates = $strong_duplicates }
+}
+
 # Bazel 아카이브의 디버그 정보를 걷는다 (아래 4단계의 주석).
 #
 # Android(ELF)는 llvm-objcopy가 아카이브를 통째로 받는다. Windows는 그러지 못한다 —
@@ -480,12 +583,27 @@ The static archive links the Rust standard library, so its notice is required.
 # bench_skia.ps1로 링크하고 실행해 확인). 어느 멤버의 이름이 문제인지는 가르지
 # 않았다. 그래서 멤버마다 번호 디렉터리를 두고 그 안에 원래 이름으로 떨어뜨린다.
 function Invoke-ArchiveStrip {
-    param([string]$source, [string]$destination, [string]$objcopy)
+    param([string]$source, [string]$destination, [string]$objcopy, [string[]]$drop = @())
 
     if ($is_android) {
         & $objcopy --strip-debug $source $destination
         if ($LASTEXITCODE -ne 0) {
             throw "llvm-objcopy --strip-debug failed on: $source"
+        }
+        if ($drop) {
+            # 멤버 이름은 아카이브 안에서 겹치지 않는다 (Get-RedundantRustMembers가 고른 것).
+            $ar = Join-Path (Split-Path -Parent $objcopy) 'llvm-ar'
+            $response = [System.IO.Path]::GetTempFileName()
+            try {
+                [System.IO.File]::WriteAllLines($response, $drop)
+                & $ar d $destination "@$response"
+                if ($LASTEXITCODE -ne 0) {
+                    throw "llvm-ar d failed on: $destination"
+                }
+            }
+            finally {
+                Remove-Item -LiteralPath $response -Force -ErrorAction SilentlyContinue
+            }
         }
         return
     }
@@ -554,7 +672,13 @@ public static class SkiaArchiveMembers {
     $work = Join-Path ([System.IO.Path]::GetTempPath()) ('skia-prep-strip-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force -Path $work | Out-Null
     try {
-        $members = [SkiaArchiveMembers]::Extract($source, $work)
+        # llvm-nm은 Windows 멤버를 Bazel의 경로째(bazel-out/.../SkRegion.o) 적고, 여기서는 풀어 낸
+        # 파일 이름으로 본다. 파일 이름은 이 아카이브 안에서 겹치지 않는다 (import 오브젝트는
+        # 고르지 않는다).
+        $dropped = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($name in $drop) { [void]$dropped.Add([System.IO.Path]::GetFileName($name.Replace('\', '/'))) }
+        $members = @([SkiaArchiveMembers]::Extract($source, $work) |
+                Where-Object { -not $dropped.Contains([System.IO.Path]::GetFileName($_)) })
         foreach ($member in $members) {
             if ([SkiaArchiveMembers]::IsCoffObject($member)) {
                 & $objcopy --strip-debug $member
@@ -819,7 +943,25 @@ foreach ($build in $builds) {
         $source = Join-Path $build.directory $component
         $published_file = Join-Path $package_build_directory $component
         if ($component -in $strip_components) {
-            Invoke-ArchiveStrip -source $source -destination $published_file -objcopy $objcopy
+            $drop = @()
+            if ($component -eq 'librust_png_ffi_rs.a') {
+                $nm = Join-Path (Split-Path -Parent $objcopy) $(if ($is_android) { 'llvm-nm' } else { 'llvm-nm.exe' })
+                $others = @($build.required | Where-Object { $_ -ne $component } |
+                        ForEach-Object { Join-Path $build.directory $_ })
+                if ($is_android) {
+                    $prebuilt = Join-Path "$($toolchain_record.ndk)" 'toolchains/llvm/prebuilt/linux-x86_64'
+                    $sysroot_lib = Join-Path $prebuilt 'sysroot/usr/lib/aarch64-linux-android'
+                    $others += @((Join-Path $sysroot_lib 'libc++_static.a'), (Join-Path $sysroot_lib 'libc++abi.a'))
+                    $others += @(Get-ChildItem -LiteralPath (Join-Path $prebuilt 'lib/clang') -Directory |
+                            ForEach-Object { Join-Path $_.FullName 'lib/linux/libclang_rt.builtins-aarch64-android.a' } |
+                            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1)
+                }
+                $redundant = Get-RedundantRustMembers -nm $nm -archive $source -others $others
+                $drop = @($redundant.remove)
+                Write-Output ('rust archive   : {0} {1} C/C++ members also defined elsewhere dropped, {2} kept, {3} strong duplicates left' -f
+                    $build.name, $drop.Count, $redundant.kept, $redundant.strong_duplicates)
+            }
+            Invoke-ArchiveStrip -source $source -destination $published_file -objcopy $objcopy -drop $drop
         }
         else {
             Copy-Item -LiteralPath $source -Destination $package_build_directory -Force

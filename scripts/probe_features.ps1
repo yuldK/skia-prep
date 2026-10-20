@@ -144,7 +144,7 @@ else {
 }
 
 function Build-Variant {
-    param([string]$label, [string]$root, [hashtable]$variant)
+    param([string]$label, [string]$root, [hashtable]$variant, [switch]$AllowMultipleDefinition)
 
     $library_directory = Join-Path $root ('out\skia-ui-{0}' -f $Configuration.ToLowerInvariant())
     $libraries = Get-Libraries -names $variant.features
@@ -169,7 +169,12 @@ function Build-Variant {
         $arguments += ($defines | ForEach-Object { "-D$_" })
         $arguments += @($source, '-o', $executable)
         $arguments += @($libraries | ForEach-Object { Join-Path $library_directory $_ })
-        $arguments += @('-Wl,--allow-multiple-definition', "-Wl,-Map=$map", '-static-libstdc++')
+        # 157 r1부터 rust 아카이브에 Skia·libc++ 오브젝트가 겹쳐 들지 않아 이 플래그 없이 링크된다
+        # (pack_skia.ps1의 Get-RedundantRustMembers). 그 전의 패키지(기준선)만 준다.
+        if ($AllowMultipleDefinition) {
+            $arguments += '-Wl,--allow-multiple-definition'
+        }
+        $arguments += @("-Wl,-Map=$map", '-static-libstdc++')
         $arguments += @(Get-SystemLibraries -names $variant.features | ForEach-Object { "-l$_" })
         & $clang @arguments 2>&1 | Out-Host
         if ($LASTEXITCODE -ne 0) {
@@ -217,7 +222,8 @@ foreach ($name in $variants.Keys) {
 
 foreach ($label in $builds.Keys) {
     Write-Output "== $label"
-    $built = Build-Variant -label $label -root $builds[$label].root -variant $builds[$label].variant
+    $built = Build-Variant -label $label -root $builds[$label].root -variant $builds[$label].variant `
+        -AllowMultipleDefinition:($label -eq 'baseline')
     $map_text = Get-Content -Raw -LiteralPath $built.map
     $present = @($markers.Keys | Where-Object { $map_text.Contains($markers[$_]) })
     $status = 'built'
