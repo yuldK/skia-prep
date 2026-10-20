@@ -872,7 +872,7 @@ $target_notices = @{
     'd3d12allocator' = @('d3d12allocator'); 'spirv_cross' = @('spirv-cross', 'spirv-headers')
     'freetype2' = @('freetype'); 'libpng' = @('libpng'); 'zlib' = @('zlib')
     'cpu-features' = @('cpu-features'); 'skcms' = @('skcms'); 'skcms_TransformHsw' = @('skcms')
-    'skcms_TransformSkx' = @('skcms')
+    'skcms_TransformSkx' = @('skcms'); 'vulkanmemoryallocator' = @('vulkanmemoryallocator')
 }
 $present_ids = @($notices | ForEach-Object { $_['id'] } | Where-Object { $_ } | Select-Object -Unique)
 $library_notices = [ordered]@{}
@@ -889,9 +889,14 @@ foreach ($component in ($builds[0].required | Sort-Object)) {
         $member_archive = Join-Path $builds[0].directory $component
         foreach ($member in (& $llvm_ar t $member_archive)) {
             $prefix = (($member -split '[/\\]')[-1] -split '\.')[0]
-            # zlib의 GN 대상은 갈래가 여럿이다 (zlib_adler32_simd 등).
-            if ($prefix -like 'zlib*') { $prefix = 'zlib' }
+            # zlib·libwebp의 GN 대상은 갈래가 여럿이다 (zlib_adler32_simd 등).
             if ($prefix -like 'libwebp*') { $prefix = 'libwebp' }
+            # Linux의 GN은 static_library의 오브젝트 이름에 lib를 붙인다 (libharfbuzz.VARC.o).
+            # 이름 자체가 lib로 시작하는 대상(libjpeg·libwebp·libavif …)은 그대로다.
+            if (-not $target_notices.ContainsKey($prefix) -and $prefix.StartsWith('lib')) {
+                $prefix = $prefix.Substring(3)
+            }
+            if ($prefix -like 'zlib*') { $prefix = 'zlib' }
             $mapped = if ($target_notices.ContainsKey($prefix)) { $target_notices[$prefix] } else { @('skia') }
             foreach ($id in $mapped) { [void]$ids.Add($id) }
         }
