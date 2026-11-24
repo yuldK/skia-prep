@@ -7,6 +7,7 @@
 #
 #   scripts\refresh_rust_licenses.ps1 -Target win-x64          (Windows에서)
 #   pwsh scripts/refresh_rust_licenses.ps1 -Target android-arm64   (WSL에서)
+#   pwsh scripts/refresh_rust_licenses.ps1 -Target mac-arm64       (Mac에서)
 #
 # build_skia.ps1 -RustPng로 그 대상을 한 번 세운 뒤에 돈다 — 그래야 Bazel의 output base에
 # 그 대상의 crate가 받아져 있다. 배치는 Bazel의 것과 같다. 걷는 것은 crate 저장소마다
@@ -16,7 +17,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('win-x64', 'android-arm64')]
+    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64')]
     [string]$Target,
     [string]$SkiaRoot,
     [string]$BazeliskPath
@@ -31,13 +32,19 @@ if (-not $SkiaRoot) {
 }
 $skia_root = (Resolve-Path -LiteralPath $SkiaRoot).Path
 $windows_host = $env:OS -eq 'Windows_NT'
-if (($Target -eq 'win-x64') -ne $windows_host) {
-    throw "-Target $Target must run where it is built (win-x64 on Windows, android-arm64 on Linux)."
+$mac_host = (Test-Path -LiteralPath 'variable:IsMacOS') -and $IsMacOS
+$built_here = switch ($Target) {
+    'win-x64' { $windows_host }
+    'mac-arm64' { $mac_host }
+    default { -not $windows_host -and -not $mac_host }
+}
+if (-not $built_here) {
+    throw "-Target $Target must run where it is built (win-x64 on Windows, android-arm64 on Linux, mac-arm64 on macOS)."
 }
 
 $bazelisk = $BazeliskPath
 if (-not $bazelisk) {
-    $candidates = @((Join-Path $repository_root 'third_party\skia-tools\bazelisk.exe'))
+    $candidates = @((Join-Path $repository_root ('third_party\skia-tools\bazelisk' + $(if ($windows_host) { '.exe' } else { '' }))))
     if (-not $windows_host -and $HOME) {
         $candidates += Join-Path $HOME 'bin/bazelisk'
     }
@@ -74,8 +81,12 @@ $crates = @(Get-ChildItem -LiteralPath $external -Directory |
 if ($crates.Count -eq 0) {
     throw "No crate repositories under $external. Build with build_skia.ps1 -RustPng first."
 }
+# Windows·Linux에서는 rust_host_tools에 있다. macOS(arm64)는 호스트와 대상이 같아 그 저장소가
+# 없고, 대상의 도구사슬 저장소(rust_macos_aarch64__aarch64-apple-darwin__stable_tools)에 있다.
 $host_tools = Get-ChildItem -LiteralPath $external -Directory |
-    Where-Object { $_.Name -like '*rust_host_tools*' } |
+    Where-Object { $_.Name -like '*rust_host_tools*' -or $_.Name -like '*__stable_tools' } |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'share/doc/rust/COPYRIGHT-library.html') -PathType Leaf } |
+    Sort-Object { $_.Name -notlike '*rust_host_tools*' }, Name |
     Select-Object -First 1
 $library_notice = if ($host_tools) { Join-Path $host_tools.FullName 'share/doc/rust/COPYRIGHT-library.html' } else { '' }
 if (-not $library_notice -or -not (Test-Path -LiteralPath $library_notice -PathType Leaf)) {

@@ -1,0 +1,56 @@
+Lets the rust png Bazel build stand on a current Xcode, for mac arm64.
+
+Two changes in toolchain/mac_toolchain_config.bzl:
+
+1. Links with the Xcode ld instead of the downloaded lld. Skia's mac toolchain
+   compiles with its own clang 22 and links with its lld against the local
+   Xcode SDK. lld 22 cannot read the TAPI stubs of the macOS 27 SDK:
+
+     ld64.lld: error: could not load TAPI file at .../MacSDK/usr/lib/libSystem.tbd: malformed file
+     .../libSystem.tbd:4:20: error: unknown architecture
+                          arm64e.x1-macos, arm64e.x1-maccatalyst ]
+
+   so the first exec tool (rules_rust's process_wrapper) fails to link.
+   Only exec tools are linked here (process_wrapper, build scripts, proc
+   macros); the published archives are static libraries and not linked, so
+   their contents do not depend on the linker. Without -fuse-ld, clang finds
+   ld on PATH (/usr/bin/ld, Xcode's).
+
+2. Lowers the arm64 C++ target from macos12 to macos11, the value GN already
+   uses for Skia itself (-target arm64-apple-macos11 in gn/skia/BUILD.gn) and
+   rustc's aarch64-apple-darwin default. Otherwise the C++ bridge objects in
+   librust_png_ffi_rs.a / libcxx_cc.a say macOS 12 while libskia.a says 11, and
+   a consumer that targets 11 gets "built for newer macOS version" warnings.
+
+The x86_64 target is left alone; this repository builds mac arm64 only.
+
+Checked on macOS 27.2 (arm64), Xcode 27.2: bazelisk build @crates//:cxx_cc
+//rust/png:ffi_rs --platforms=//bazel/platform:mac_arm64_hermetic.
+
+diff --git a/toolchain/mac_toolchain_config.bzl b/toolchain/mac_toolchain_config.bzl
+index 010806d778..4f50485063 100644
+--- a/toolchain/mac_toolchain_config.bzl
++++ b/toolchain/mac_toolchain_config.bzl
+@@ -351,7 +351,10 @@ def _make_default_flags(ctx, external_toolchain, xcode_macsdk_symlink):
+                     # This path is relative to the syslibroot above, and we want lld to look in the
+                     # Frameworks symlink that was created in download_mac_toolchain.bzl.
+                     "-F/System/Library/Frameworks",
+-                    "-fuse-ld=lld",
++                    # skia-prep: link with the Xcode ld (/usr/bin/ld), not the downloaded
++                    # lld. Only exec tools (process_wrapper, build scripts, proc macros) are
++                    # linked here, and lld 22 cannot read the TAPI stubs of newer SDKs
++                    # (macOS 27: "unknown architecture arm64e.x1" in libSystem.tbd).
+                     "-std=c++20",
+                     # Link against gnu libc that's in the Mac SDK.
+                     "-lc++",
+@@ -477,7 +480,9 @@ def _make_target_specific_flags(ctx):
+         flag_groups = [
+             flag_group(
+                 flags = [
+-                    "--target=arm64-apple-macos12",
++                    # skia-prep: macOS 11, as GN's -target arm64-apple-macos11
++                    # (gn/skia/BUILD.gn) and rustc's aarch64-apple-darwin default.
++                    "--target=arm64-apple-macos11",
+                 ],
+             ),
+         ],

@@ -32,7 +32,7 @@ param(
     [string]$SkiaRoot,
     [ValidateSet('Debug', 'Release')]
     [string[]]$Configuration = @('Release'),
-    [ValidateSet('win-x64', 'android-arm64')]
+    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64')]
     [string]$Target = 'win-x64',
     # build_skia.ps1의 -OutputSuffix와 같은 값이다. 읽는 자리만 바뀐다 —
     # **패키지 안의 배치는 언제나 out/skia-ui-{구성}이다.** 소비자의 계약이 그것이다.
@@ -43,6 +43,9 @@ param(
     # $package_revision의 주석에 있다.
     [int]$PackageRevision,
     [string]$BazeliskPath,
+    # mac-arm64에서 rust 아카이브의 디버그 정보를 걷는 llvm-objcopy다. Xcode에는 없다.
+    # 주지 않으면 Bazel이 rust 빌드에 받아 둔 clang 꾸러미의 것을 찾는다 (Resolve-MacObjcopy).
+    [string]$ObjcopyPath,
     [string]$RustLicenseRoot,
     # include/third_party/ 는 vulkan·dawn 헤더 20.7 MB다.
     # win-x64의 GN args는 vulkan을 끄므로 아무것도 그것을 열지 않는다
@@ -64,7 +67,8 @@ Set-StrictMode -Version Latest
 
 $repository_root = Split-Path -Parent $PSScriptRoot
 $is_android = $Target -like 'android-*'
-$target_part = if ($is_android) { "$Target-" } else { '' }
+$is_mac = $Target -like 'mac-*'
+$target_part = if ($is_android -or $is_mac) { "$Target-" } else { '' }
 if (-not $SkiaRoot) {
     $SkiaRoot = Join-Path $repository_root 'third_party\skia'
 }
@@ -85,8 +89,15 @@ if (-not $Destination) {
 # win-x64는 luil CMakeLists.txt의 LUIL_SKIA_COMPONENTS에서 png 갈래 몫을 뺀 목록이다
 # (파일 이름 그대로). verify_skia_root.ps1도 같은 목록을 갖는다.
 # android-arm64에서는 libpng과 zlib이 png 갈래와 무관하게 들어간다 — freetype이
-# 컬러 이모지 때문에 끌어온다.
-if ($is_android) {
+# 컬러 이모지 때문에 끌어온다. mac-arm64는 Windows와 같은 모양이다 (verify_skia_root.ps1).
+if ($is_mac) {
+    $components = @(
+        'libskia.a', 'libskcms.a',
+        'libjpeg.a', 'libjpeg12.a', 'libjpeg16.a',
+        'libwebp.a', 'libwebp_sse41.a', 'libwuffs.a')
+    $libpng_components = @('libpng.a', 'libzlib.a')
+}
+elseif ($is_android) {
     $components = @(
         'libskia.a', 'libskcms.a',
         'libjpeg.a', 'libjpeg12.a', 'libjpeg16.a',
@@ -151,10 +162,11 @@ $module_header_files = @('modules/skshaper/utils/FactoryHelpers.h')
 #   android-arm64 r2  기능별 아카이브(SVG·텍스트·Skottie·AVIF)가 더해졌다.
 #
 # 여기까지가 Skia 152(0873ec164a)의 판번이다. 157(b94213a11b, chrome/m157)로 옮기며
-# 두 대상 모두 1로 되돌렸다.
+# 두 대상 모두 1로 되돌렸다. mac-arm64의 r1은 첫 macOS 패키지다 (Skia 157).
 $package_revisions = @{
     'win-x64'       = 1
     'android-arm64' = 1
+    'mac-arm64'     = 1
 }
 $package_revision = $package_revisions[$Target]
 
@@ -171,7 +183,8 @@ $externals_root = Join-Path $skia_root 'third_party\externals'
 #
 # 대상마다 들어가는 것이 다르다. win-x64는 Direct3D backend의 셋(SPIRV 둘,
 # D3D12MA)을, android-arm64는 Vulkan 할당기와 글꼴 길(freetype·expat)과
-# freetype이 끌어오는 libpng·zlib과 NDK의 cpu-features를 싣는다.
+# freetype이 끌어오는 libpng·zlib과 NDK의 cpu-features를 싣는다. mac-arm64는 더하는
+# 것이 없다 — Metal·CoreText·ICU가 모두 시스템의 것이다.
 #
 # freetype은 FTL과 GPLv2 중 하나를 고르는 이중 라이선스다. 이 패키지는 **FTL을
 # 고른다** — LICENSE.TXT(고르는 규칙)와 docs/FTL.TXT(본문)를 함께 싣는다. FTL은
@@ -194,7 +207,7 @@ if ($is_android) {
         @{ id = 'freetype'; name = 'FreeType - license choice'; path = (Join-Path $externals_root 'freetype\LICENSE.TXT') },
         @{ id = 'freetype'; name = 'FreeType - The FreeType Project License (FTL)'; path = (Join-Path $externals_root 'freetype\docs\FTL.TXT') })
 }
-else {
+elseif (-not $is_mac) {
     $common_notices += @(
         @{ id = 'spirv-cross'; name = 'SPIRV-Cross'; path = (Join-Path $externals_root 'spirv-cross\LICENSE') },
         @{ id = 'spirv-headers'; name = 'SPIRV-Headers'; path = (Join-Path $externals_root 'spirv-headers\LICENSE') },
@@ -351,13 +364,15 @@ function Resolve-RustLicenseRoot {
 
     $bazelisk = $BazeliskPath
     if (-not $bazelisk) {
-        $local = Join-Path $repository_root 'third_party\skia-tools\bazelisk.exe'
+        # Windows에서만 .exe다. Linux·macOS의 실행 파일에는 확장자가 없다.
+        $suffix = if ($env:OS -eq 'Windows_NT') { '.exe' } else { '' }
+        $local = Join-Path $repository_root ('third_party\skia-tools\bazelisk' + $suffix)
         if (Test-Path -LiteralPath $local -PathType Leaf) {
             $bazelisk = (Resolve-Path -LiteralPath $local).Path
         }
         else {
             $command = Get-Command -Name 'bazelisk' -CommandType Application -ErrorAction SilentlyContinue |
-                Where-Object { [System.IO.Path]::GetExtension($_.Source) -eq '.exe' } |
+                Where-Object { [System.IO.Path]::GetExtension($_.Source) -eq $suffix } |
                 Select-Object -First 1
             if ($command) {
                 $bazelisk = $command.Source
@@ -442,8 +457,10 @@ function Get-RustCrateNotice {
 function Copy-RustRuntimeNotice {
     param([string]$external_root, [string]$package_root)
 
+    # macOS는 rust_host_tools가 없고 대상 도구사슬 저장소(…__stable_tools)에 있다.
     $documents = Get-ChildItem -LiteralPath $external_root -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like '*rust_host_tools*' } |
+        Where-Object { $_.Name -like '*rust_host_tools*' -or $_.Name -like '*__stable_tools' } |
+        Sort-Object { $_.Name -notlike '*rust_host_tools*' }, Name |
         ForEach-Object { Join-Path $_.FullName 'share\doc\rust' } |
         Where-Object { Test-Path -LiteralPath $_ } |
         Select-Object -First 1
@@ -481,7 +498,8 @@ The static archive links the Rust standard library, so its notice is required.
 #     그리고 아무도 찾지 않는 것(옛 libc++ 내부 같은)만 정의하는 멤버가 그것이다.
 #   - 남는 멤버가 찾는 기호를 뺀 멤버만 갖고 있으면 그 멤버를 되살린다 (고정점).
 # "다른 곳"은 패키지의 다른 아카이브와, Android에서는 소비자가 늘 링크하는 NDK의
-# libc++·libc++abi·compiler-rt builtins다.
+# libc++·libc++abi·compiler-rt builtins다. mac에서는 패키지의 다른 아카이브뿐이다 —
+# libc++는 dylib이라 정적 사본과 겹쳐도 링크가 깨지지 않는다.
 function Get-RedundantRustMembers {
     param([string]$nm, [string]$archive, [string[]]$others)
 
@@ -499,6 +517,12 @@ function Get-RedundantRustMembers {
             }
             $member = $line.Substring($prefix.Length, $split - $prefix.Length)
             $fields = $line.Substring($split + 2).Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+            # Mach-O에서 --undefined-only는 형 글자 없이 이름만 적는다 ("member.o: _name").
+            # ELF·COFF는 "U name"이다. 이름 하나뿐이면 미정의로 읽는다 — 그러지 않으면 mac에서
+            # 미정의 기호를 하나도 못 읽어, rust 코드가 찾는 cxx 브리지 멤버까지 걷는다.
+            if ($fields.Count -eq 1 -and $mode -eq '--undefined-only') {
+                $fields = @('U', $fields[0])
+            }
             if ($fields.Count -lt 2) {
                 continue
             }
@@ -583,8 +607,113 @@ function Get-RedundantRustMembers {
 # 이름(경로를 뗀 것)을 그대로 두고 묶으면 걷은 것까지 돈다 (2026-10-02,
 # bench_skia.ps1로 링크하고 실행해 확인). 어느 멤버의 이름이 문제인지는 가르지
 # 않았다. 그래서 멤버마다 번호 디렉터리를 두고 그 안에 원래 이름으로 떨어뜨린다.
+#
+# mac(Mach-O)도 llvm-objcopy가 아카이브를 통째로 받는다. 다만 Xcode에는 그것이 없고, Xcode의
+# `strip -S`는 쓸 수 없다 — 디버그 정보와 함께 rust 기호 이름의 `.llvm.<해시>` 꼬리까지 떼어,
+# 서로 다른 codegen unit의 내부 기호 둘이 같은 이름이 되고 소비자의 ld가 "duplicate symbol"을
+# 낸다 (2026-11-24, Xcode 27.2 실측). 그래서 llvm-objcopy는 Resolve-MacObjcopy가 찾고, 멤버
+# 빼기와 심볼 표 다시 쓰기는 Xcode의 ar·ranlib로 한다.
+function Resolve-MacObjcopy {
+    if ($ObjcopyPath) {
+        if (-not (Test-Path -LiteralPath $ObjcopyPath -PathType Leaf)) {
+            throw "-ObjcopyPath was not found: $ObjcopyPath"
+        }
+        return (Resolve-Path -LiteralPath $ObjcopyPath).Path
+    }
+    # Bazel의 mac 도구사슬이 받는 clang 꾸러미(clang_mac)에 들어 있다. rust 갈래를 세운 기계라면
+    # 그 output base에 있다.
+    $bazelisk = $BazeliskPath
+    if (-not $bazelisk) {
+        $local = Join-Path $repository_root 'third_party/skia-tools/bazelisk'
+        $bazelisk = if (Test-Path -LiteralPath $local -PathType Leaf) { $local }
+        else { (Get-Command -Name 'bazelisk' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source }
+    }
+    if ($bazelisk) {
+        Push-Location $skia_root
+        try {
+            $output_base = "$(& $bazelisk info output_base 2>$null)".Trim()
+        }
+        finally {
+            Pop-Location
+        }
+        if ($LASTEXITCODE -eq 0 -and $output_base) {
+            $found = Get-ChildItem -LiteralPath (Join-Path $output_base 'external') -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like '*clang_mac*' } |
+                ForEach-Object { Join-Path $_.FullName 'bin/llvm-objcopy' } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+                Select-Object -First 1
+            if ($found) {
+                return $found
+            }
+        }
+    }
+    $command = Get-Command -Name 'llvm-objcopy' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) {
+        return $command.Source
+    }
+    throw @"
+llvm-objcopy was not found. Xcode does not ship one, and Xcode's strip -S cannot be
+used on the rust archives (it renames their symbols; see Invoke-ArchiveStrip).
+
+Do one of these:
+  1. Build with build_skia.ps1 -RustPng on this Mac first; Bazel's clang package
+     (external/*clang_mac*/bin/llvm-objcopy) is then found through bazelisk.
+  2. Pass -ObjcopyPath <any LLVM's llvm-objcopy>.
+"@
+}
+
+# DWARF와 함께 내장 bitcode(__LLVM,__bitcode·__cmdline)를 걷는다. Rust 표준 라이브러리의
+# 오브젝트가 rustc의 LTO를 위해 bitcode를 담고 나온다 (Release rust 아카이브의 3분의 2).
+# Xcode 14부터 ld는 그것을 읽지 않고, 남겨 두면 llvm-nm이 Mach-O 기호표 대신 bitcode의
+# 기호를 읽어 Get-RedundantRustMembers가 미정의 기호 몇을 못 본다.
+function Invoke-MacObjcopy {
+    param([string]$objcopy, [string]$source, [string]$destination)
+
+    & $objcopy --strip-debug --remove-section=__LLVM,__bitcode --remove-section=__LLVM,__cmdline $source $destination
+    if ($LASTEXITCODE -ne 0) {
+        throw "llvm-objcopy --strip-debug failed on: $source"
+    }
+}
+
 function Invoke-ArchiveStrip {
     param([string]$source, [string]$destination, [string]$objcopy, [string[]]$drop = @())
+
+    if ($is_mac) {
+        # 4단계가 이미 Invoke-MacObjcopy로 걷어 $destination에 두었다. 남은 것은 멤버 빼기다.
+        if ($source -ne $destination) {
+            Invoke-MacObjcopy -objcopy $objcopy -source $source -destination $destination
+        }
+        $tools = Split-Path -Parent "$(& xcrun --find ar)".Trim()
+        # Apple의 ar·ranlib는 고친 아카이브의 멤버 머리와 심볼 표에 지금 시각을 적는다. 그러면
+        # 같은 빌드를 다시 싼 zip의 해시가 바뀐다 (Get-PackageTimestamp의 약속). ZERO_AR_DATE가
+        # 그 시각을 0으로 둔다 — Xcode의 libtool·ar·ranlib가 읽는 환경 변수다.
+        $previous_zero_ar_date = $env:ZERO_AR_DATE
+        $env:ZERO_AR_DATE = '1'
+        try {
+            if ($drop) {
+                # 멤버 이름은 아카이브 안에서 겹치지 않는다 (Get-RedundantRustMembers가 고른 것).
+                # Apple ar는 응답 파일을 받지 않아 몇백 개씩 나눠 넘긴다.
+                for ($index = 0; $index -lt $drop.Count; $index += 200) {
+                    $chunk = @($drop[$index..([Math]::Min($index + 199, $drop.Count - 1))])
+                    & (Join-Path $tools 'ar') d $destination @chunk
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "ar d failed on: $destination"
+                    }
+                }
+            }
+            & (Join-Path $tools 'ranlib') -no_warning_for_no_symbols $destination 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                & (Join-Path $tools 'ranlib') $destination
+                if ($LASTEXITCODE -ne 0) {
+                    throw "ranlib failed on: $destination"
+                }
+            }
+        }
+        finally {
+            $env:ZERO_AR_DATE = $previous_zero_ar_date
+        }
+        return
+    }
 
     if ($is_android) {
         & $objcopy --strip-debug $source $destination
@@ -779,7 +908,12 @@ Write-Output "Skia root      : $skia_root"
 Write-Output "Target         : $Target"
 Write-Output "Configurations : $($configurations -join ', ')"
 Write-Output "png codec      : $png_codec"
-if ($is_android) {
+if ($is_mac) {
+    Write-Output ("toolchain      : {0}, Xcode {1}, macOS SDK {2}, deployment target {3}, rust bridge {4}" -f
+        $toolchain_record.compiler_version, $toolchain_record.xcode_version, $toolchain_record.macos_sdk,
+        $toolchain_record.macos_deployment_target, $toolchain_record.rust_bridge_compiler_version)
+}
+elseif ($is_android) {
     Write-Output ("toolchain      : clang, NDK r{0}, ndk_api {1}, rust bridge NDK r{2}" -f
         $toolchain_record.ndk_revision, $toolchain_record.ndk_api, $toolchain_record.rust_bridge_ndk_revision)
 }
@@ -880,7 +1014,7 @@ foreach ($build in $builds) {
     New-Item -ItemType Directory -Force -Path $package_build_directory | Out-Null
     $published_arguments = Join-Path $package_build_directory 'args.gn'
     # build_skia.ps1이 args에 덧붙인 것 중 **생산자 기계의 경로**가 있다 — Android의
-    # ndk, 그리고 두 대상의 -ffile-prefix-map 앞쪽(저장소·Skia 트리). 그 경로 자체를
+    # ndk, 그리고 대상마다의 -ffile-prefix-map 앞쪽(저장소·Skia 트리, mac은 Xcode도). 그 경로 자체를
     # 이름으로 바꿔 싣는다. 줄을 지우지 않는 것은 gn이 긴 값을 여러 줄로 접어 쓰기
     # 때문이고, 바꾼 뒤에도 무엇을 어디로 옮겼는지는 남는다. 긴 경로부터 바꾼다
     # (Skia 트리가 저장소 안에 있다). GN 문자열 안에서는 슬래시로 적혀 있다.
@@ -889,6 +1023,13 @@ foreach ($build in $builds) {
     $machine_paths = [ordered]@{}
     if ($is_android) {
         $machine_paths["$($toolchain_record.ndk)"] = "<android-ndk r$($toolchain_record.ndk_revision)>"
+    }
+    # mac의 prefix map에는 Xcode의 자리가 든다. ~/Applications에 둔 Xcode라면 사용자 이름이다.
+    if ($is_mac) {
+        $developer = "$(& xcode-select -p 2>$null)".Trim()
+        if ($developer) {
+            $machine_paths[$developer] = "<xcode $($toolchain_record.xcode_version)>"
+        }
     }
     foreach ($pair in @(@($skia_root, '<skia>'), @($repository_root, '<skia-prep>'))) {
         $machine_paths[$pair[0]] = $pair[1]
@@ -926,7 +1067,10 @@ foreach ($build in $builds) {
     $objcopy = ''
     if ($png_codec -eq 'rust') {
         $strip_components = $rust_png_components
-        $objcopy = if ($is_android) {
+        $objcopy = if ($is_mac) {
+            Resolve-MacObjcopy
+        }
+        elseif ($is_android) {
             Join-Path "$($toolchain_record.ndk)" 'toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy'
         }
         elseif ("$($toolchain_record.clang_win)") {
@@ -945,8 +1089,15 @@ foreach ($build in $builds) {
         $published_file = Join-Path $package_build_directory $component
         if ($component -in $strip_components) {
             $drop = @()
+            # mac은 먼저 걷고 나서 고른다 (Invoke-ArchiveStrip의 주석). 걷기 전에는 Xcode의
+            # llvm-nm이 내장 bitcode의 기호를 읽어 Mach-O 기호표와 다른 것을 본다.
+            if ($is_mac) {
+                Invoke-MacObjcopy -objcopy $objcopy -source $source -destination $published_file
+                $source = $published_file
+            }
             if ($component -eq 'librust_png_ffi_rs.a') {
-                $nm = Join-Path (Split-Path -Parent $objcopy) $(if ($is_android) { 'llvm-nm' } else { 'llvm-nm.exe' })
+                $nm = if ($is_mac) { "$(& xcrun --find llvm-nm)".Trim() }
+                else { Join-Path (Split-Path -Parent $objcopy) $(if ($is_android) { 'llvm-nm' } else { 'llvm-nm.exe' }) }
                 $others = @($build.required | Where-Object { $_ -ne $component } |
                         ForEach-Object { Join-Path $build.directory $_ })
                 if ($is_android) {
@@ -1075,7 +1226,11 @@ Write-Output ('notices        : {0} components -> NOTICE.md' -f $notices.Count)
 #               적고, scripts/probe_features.ps1이 링크 맵으로 확인한다. 둘이 다를 수 있다 —
 #               Windows의 skia.lib는 expat을 담지만, expat은 SVG(XML 파서)를 쓸 때만 링크된다.
 # rust 아카이브는 crate 전부와 Rust 표준 라이브러리, 그리고 함께 담긴 Skia 오브젝트다.
-$llvm_ar = if ($is_android) {
+# mac에서는 Xcode의 ar(BSD)다. `ar t`가 멤버 이름을 내는 것은 같다.
+$llvm_ar = if ($is_mac) {
+    "$(& xcrun --find ar)".Trim()
+}
+elseif ($is_android) {
     Join-Path "$($toolchain_record.ndk)" 'toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
 }
 else {
@@ -1109,6 +1264,8 @@ foreach ($component in ($builds[0].required | Sort-Object)) {
     else {
         $member_archive = Join-Path $builds[0].directory $component
         foreach ($member in (& $llvm_ar t $member_archive)) {
+            # BSD ar는 심볼 표도 멤버로 적는다 (__.SYMDEF SORTED).
+            if ($member -like '__.SYMDEF*') { continue }
             $prefix = (($member -split '[/\\]')[-1] -split '\.')[0]
             # zlib·libwebp의 GN 대상은 갈래가 여럿이다 (zlib_adler32_simd 등).
             if ($prefix -like 'libwebp*') { $prefix = 'libwebp' }
@@ -1189,7 +1346,10 @@ $patches = @('skia-157-separable-avif.patch', 'skia-157-skshaper-legacy-split.pa
     'skia-157-runtime-icu-system.patch', 'skia-157-module-archives.patch',
     'skia-157-separable-libgrapheme.patch')
 if ($png_codec -eq 'rust') {
-    $patches += if ($is_android) {
+    $patches += if ($is_mac) {
+        @('skia-157-bazel-rust-mac-toolchain.patch')
+    }
+    elseif ($is_android) {
         @('skia-157-bazel-rust-android-ndk.patch',
             'skia-157-bazel-rust-android-triples.patch',
             'skia-157-bazel-rust-android-platform.patch')
@@ -1203,7 +1363,19 @@ if ($png_codec -eq 'rust') {
 # 같은 Skia commit에서 나온 두 패키지를 가르는 것이 이것이다.
 # commit만으로는 구별되지 않으므로 판번과 함께 적는다.
 # win-x64의 키는 그대로 둔다 — luil의 fetch_skia.ps1이 이 파일을 읽는다.
-$version_toolchain = if ($is_android) {
+$version_toolchain = if ($is_mac) {
+    [ordered]@{
+        compiler                     = $toolchain_record.compiler
+        compiler_version             = $toolchain_record.compiler_version
+        linker                       = $toolchain_record.linker
+        xcode_version                = $toolchain_record.xcode_version
+        macos_sdk                    = $toolchain_record.macos_sdk
+        macos_deployment_target      = $toolchain_record.macos_deployment_target
+        rust_bridge_compiler_version = $toolchain_record.rust_bridge_compiler_version
+        is_trivial_abi               = $false
+    }
+}
+elseif ($is_android) {
     [ordered]@{
         compiler                 = $toolchain_record.compiler
         compiler_version         = $toolchain_record.compiler_version

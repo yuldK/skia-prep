@@ -30,15 +30,18 @@
 # 대상은 -Target이 정한다. 기본은 win-x64이고, 그때는 위의 모든 것이 그대로다.
 #   win-x64       : Windows에서 돈다. clang-cl, Direct3D.
 #   android-arm64 : **Linux에서 돈다** (WSL2면 된다). NDK clang, Vulkan.
+#   mac-arm64     : **macOS에서 돈다** (Apple Silicon). Xcode의 Apple clang, Metal.
 # Android가 Linux를 요구하는 것은 rust png 때문이다. Skia의 Bazel NDK 도구사슬이
-# linux x86_64 호스트에서만 돈다 (docs/skia-build.md 8). -Toolchain·-ClangPath는
-# Windows 대상에서만 뜻이 있고, Android에서는 -NdkPath가 그 자리다.
+# linux x86_64 호스트에서만 돈다 (docs/skia-build.md 8). macOS도 같은 이유로 Mac이
+# 든다 — Bazel의 mac 도구사슬이 그 기계의 Xcode SDK를 symlink한다 (9장).
+# -Toolchain·-ClangPath는 Windows 대상에서만 뜻이 있고, Android에서는 -NdkPath가
+# 그 자리다. mac에서는 넘길 것이 없다 — PATH의 clang(xcode-select가 고른 Xcode)이다.
 
 [CmdletBinding()]
 param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
-    [ValidateSet('win-x64', 'android-arm64')]
+    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64')]
     [string]$Target = 'win-x64',
     [string]$NdkPath,
     [string]$SkiaRoot,
@@ -70,8 +73,12 @@ $repository_root = Split-Path -Parent $PSScriptRoot
 # 호스트 판정에 $IsWindows를 쓰지 않는다. Windows PowerShell 5.1에는 그 변수가
 # 없어 StrictMode가 읽는 순간 던진다. $env:OS는 5.1·7·Linux에서 모두 읽힌다.
 $windows_host = $env:OS -eq 'Windows_NT'
+# $IsMacOS도 5.1에는 없다. 변수가 있는지부터 본다.
+$mac_host = (Test-Path -LiteralPath 'variable:IsMacOS') -and $IsMacOS
 $is_android = $Target -like 'android-*'
-if ($is_android -and $windows_host) {
+$is_mac = $Target -like 'mac-*'
+$is_windows_target = -not $is_android -and -not $is_mac
+if ($is_android -and ($windows_host -or $mac_host)) {
     throw @"
 -Target $Target must run on Linux (WSL2 is enough).
 
@@ -80,11 +87,23 @@ only runs on a linux x86_64 host (toolchain/BUILD.bazel). Run this script with
 pwsh inside WSL, against a Skia tree on the Linux file system.
 "@
 }
-if (-not $is_android -and -not $windows_host) {
+if ($is_mac -and -not $mac_host) {
+    throw @"
+-Target $Target must run on macOS.
+
+Skia compiles with Xcode's clang against the macOS SDK, and its rust png
+codec's Bazel toolchain symlinks that SDK from the local Xcode
+(toolchain/download_mac_toolchain.bzl). Run this script with pwsh on a Mac.
+"@
+}
+if ($is_windows_target -and -not $windows_host) {
     throw "-Target $Target must run on Windows. It compiles with clang-cl against MSVC."
 }
-if ($is_android -and ($PSBoundParameters.ContainsKey('Toolchain') -or $ClangPath)) {
-    throw "-Toolchain and -ClangPath apply to win-x64 only. Android compiles with the NDK's clang (-NdkPath)."
+if (-not $is_windows_target -and ($PSBoundParameters.ContainsKey('Toolchain') -or $ClangPath)) {
+    throw "-Toolchain and -ClangPath apply to win-x64 only. Android compiles with the NDK's clang (-NdkPath), macOS with Xcode's clang."
+}
+if ($NdkPath -and -not $is_android) {
+    throw '-NdkPath applies to android-arm64 only.'
 }
 $executable_suffix = if ($windows_host) { '.exe' } else { '' }
 
@@ -541,7 +560,7 @@ Run: git submodule update --init third_party/skia
 }
 
 # win-x64의 파일·디렉터리 이름에는 대상이 없다. 대상이 하나이던 때의 이름을 그대로 둔다.
-$target_part = if ($is_android) { "$Target-" } else { '' }
+$target_part = if ($is_windows_target) { '' } else { "$Target-" }
 if (-not $ArgumentFile) {
     $ArgumentFile = Join-Path $repository_root ('third_party\skia-args\skia-ui-{0}{1}.gn' -f `
             $target_part, $Configuration.ToLowerInvariant())
@@ -561,7 +580,7 @@ if (-not (Test-Path -LiteralPath $png_argument_file)) {
 $argument_text = (Get-Content -Raw -LiteralPath $ArgumentFile) + "`n" +
     (Get-Content -Raw -LiteralPath $png_argument_file)
 if ($DebugInfo) {
-    if ($is_android -or $Configuration -ne 'Release' -or $Toolchain -ne 'clang') {
+    if (-not $is_windows_target -or $Configuration -ne 'Release' -or $Toolchain -ne 'clang') {
         throw '-DebugInfo is for the win-x64 Release symbols asset only (clang-cl, Release).'
     }
     if (-not $OutputSuffix) {
@@ -607,13 +626,14 @@ function Resolve-Bazelisk {
     }
 
     if (-not $windows_host) {
+        $asset = if ($mac_host) { 'bazelisk-darwin-arm64' } else { 'bazelisk-linux-amd64' }
         throw @"
 -RustPng needs bazelisk, and it was not found. Searched:
   $($locals -join "`n  ")
   (PATH)
 
-Download bazelisk-linux-amd64 from github.com/bazelbuild/bazelisk/releases,
-rename it to bazelisk, chmod +x it and put it in ~/bin.
+Download $asset from github.com/bazelbuild/bazelisk/releases,
+rename it to bazelisk, chmod +x it and put it in ~/bin or $tool_directory.
 "@
     }
     $local = $locals[0]
@@ -734,8 +754,10 @@ if ($windows_host) {
     }
 }
 $gn_hint = if ($windows_host) { 'The CIPD package page for gn/gn/windows-amd64 has it.' }
+elseif ($mac_host) { 'The CIPD package page for gn/gn/mac-arm64 has it.' }
 else { 'The CIPD package page for gn/gn/linux-amd64 has it.' }
 $ninja_hint = if ($windows_host) { 'The ninja-build releases page has ninja-win.zip.' }
+elseif ($mac_host) { 'The ninja-build releases page has ninja-mac.zip.' }
 else { 'The ninja-build releases page has ninja-linux.zip.' }
 $gn = Resolve-Tool -given $GnPath -name 'gn' -fetch_script 'fetch-gn' -hint $gn_hint
 $ninja = Resolve-Tool -given $NinjaPath -name 'ninja' -fetch_script 'fetch-ninja' `
@@ -751,7 +773,31 @@ $clang_win = ''
 $compiler_version = ''
 $ndk = ''
 $ndk_revision = ''
-if ($is_android) {
+$xcode_developer = ''
+if ($is_mac) {
+    # GN은 mac에서 PATH의 clang·clang++을 부른다 (gn/BUILDCONFIG.gn의 cc·cxx). /usr/bin의
+    # 그것은 xcode-select가 고른 Xcode로 가는 shim이므로, 판번은 그 Xcode의 것이다.
+    # SDK는 gn/find_xcode_sysroot.py가 같은 xcrun으로 찾는다.
+    $xcode_developer = "$(& xcode-select -p 2>$null)".Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $xcode_developer -or
+        -not (Test-Path -LiteralPath (Join-Path $xcode_developer 'Platforms/MacOSX.platform') -PathType Container)) {
+        throw @"
+-Target $Target needs Xcode (not only the Command Line Tools), and xcode-select
+points at: $xcode_developer
+
+Metal shaders and the macOS SDK come with Xcode. Install it and run:
+  sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+"@
+    }
+    $compiler_version = "$(& clang --version | Select-Object -First 1)".Trim()
+    if ($compiler_version -notmatch '^Apple clang') {
+        Write-Warning "clang on PATH is not Xcode's ($compiler_version); GN will compile with it."
+    }
+    if ("$(& uname -m)".Trim() -ne 'arm64') {
+        Write-Warning 'This Mac is not Apple Silicon. -Target mac-arm64 then cross-compiles, which is untested here.'
+    }
+}
+elseif ($is_android) {
     $ndk = Resolve-Ndk
     $ndk_revision = Get-NdkRevision -root $ndk
     if ($ndk_revision -notmatch "^$expected_ndk_major\.") {
@@ -803,6 +849,17 @@ if ($is_android) {
     $prefix_flags = @($prefix_maps.Keys | ForEach-Object { '-ffile-prefix-map={0}={1}' -f $_, $prefix_maps[$_] })
     $flag_names = @('extra_cflags_c', 'extra_cflags_cc', 'extra_asmflags')
 }
+elseif ($is_mac) {
+    # mac에서는 Objective-C++(.mm — Metal backend와 CoreText)이 많다. extra_cflags_c·_cc는
+    # 그것에 닿지 않으므로 넷 모두에 붙는 extra_cflags와 extra_asmflags에 넣는다. 그 둘은
+    # args 파일이 배포 하한(-mmacosx-version-min)으로 이미 대입하므로 아래에서 그 줄에
+    # 덧붙인다. Xcode의 자리(SDK 헤더가 DWARF에 남는다)도 이름 하나로 바꾼다 — 어느 자리에
+    # 둔 Xcode로 세워도 같은 오브젝트가 나오고, ~/Applications에 둔 Xcode라면 사용자 이름이
+    # 실리지 않는다.
+    $prefix_maps[$xcode_developer] = 'xcode'
+    $prefix_flags = @($prefix_maps.Keys | ForEach-Object { '-ffile-prefix-map={0}={1}' -f $_, $prefix_maps[$_] })
+    $flag_names = @('extra_cflags', 'extra_asmflags')
+}
 elseif ($Toolchain -eq 'clang') {
     $prefix_flags = @($prefix_maps.Keys | ForEach-Object { '/clang:-ffile-prefix-map={0}={1}' -f $_, $prefix_maps[$_] }) +
         @('/clang:-fdebug-compilation-dir=.', '/clang:-gno-codeview-command-line')
@@ -816,7 +873,19 @@ else {
 if ($prefix_flags) {
     $flag_list = ($prefix_flags | ForEach-Object { '"{0}"' -f $_ }) -join ', '
     foreach ($name in $flag_names) {
-        $argument_text += "{0} = [ {1} ]`n" -f $name, $flag_list
+        # 이미 대입된 변수면 그 목록 끝에 덧붙인다. 한 변수에 두 번 대입하면 gn이 거부한다.
+        $pattern = '(?m)^(\s*{0}\s*=\s*\[)([^\]]*?)\s*\]' -f [regex]::Escape($name)
+        $match = [regex]::Match($argument_text, $pattern)
+        if ($match.Success) {
+            $existing = $match.Groups[2].Value.Trim()
+            $joined = if ($existing) { '{0}, {1}' -f $existing.TrimEnd(','), $flag_list } else { $flag_list }
+            $argument_text = $argument_text.Substring(0, $match.Index) +
+                ('{0} {1} ]' -f $match.Groups[1].Value, $joined) +
+                $argument_text.Substring($match.Index + $match.Length)
+        }
+        else {
+            $argument_text += "{0} = [ {1} ]`n" -f $name, $flag_list
+        }
     }
 }
 
@@ -827,6 +896,10 @@ Write-Output "Argument file  : $ArgumentFile"
 Write-Output "png codec      : $png_flavor ($png_argument_file)"
 if ($ndk) {
     Write-Output "ndk            : $ndk (r$ndk_revision)"
+    Write-Output "clang          : $compiler_version"
+}
+elseif ($is_mac) {
+    Write-Output "xcode          : $xcode_developer"
     Write-Output "clang          : $compiler_version"
 }
 else {
@@ -880,7 +953,8 @@ Run: git submodule update --init third_party/skia-externals/$name
 #                              skia_use_libavif는 SkCodec의 기본 목록에 AVIF를 넣는다.
 #      skshaper-legacy-split : HarfBuzz·SkUnicode를 부르는 옛 SkShaper 함수를 다른
 #                              오브젝트로 옮긴다. SVG만 쓰는 소비자가 그 둘 없이 링크된다.
-#      runtime-icu-system    : runtime ICU가 Android의 libicu.so와 Windows의 icu.dll을 연다.
+#      runtime-icu-system    : runtime ICU가 Android의 libicu.so, Windows의 icu.dll,
+#                              macOS의 libicucore.A.dylib를 연다.
 #      module-archives       : 모듈 아카이브가 자기 오브젝트만 담는다. 그러지 않으면
 #                              skshaper가 HarfBuzz를, svg·skottie가 skia의 core를 복사해 든다.
 #      separable-libgrapheme : skshaper가 SkUnicodes::Libgrapheme::Make를 부르지 않는다.
@@ -900,7 +974,15 @@ $patch_set = @(
     @('skia-157-runtime-icu-system.patch', 'runtime icu system'),
     @('skia-157-module-archives.patch', 'module archives'),
     @('skia-157-separable-libgrapheme.patch', 'separable libgrapheme'))
-if ($RustPng) {
+#      mac-arm64     : Bazel의 mac 도구사슬이 Xcode의 ld로 링크하고(받아 쓰는 lld 22가
+#                      macOS 27 SDK의 .tbd를 읽지 못한다), C++ 하한을 GN과 같은
+#                      macOS 11로 둔다 (docs/skia-build.md 9). 플랫폼은 Skia의 BUILD.gn이
+#                      mac에서는 원래 넘기고, 산출물 이름도 Linux와 같은 lib*.a다.
+# 하나만 더할 때는 쉼표로 감싸야 한다 — 그러지 않으면 += 가 그 쌍의 두 문자열을 따로 붙인다.
+if ($RustPng -and $is_mac) {
+    $patch_set += , @('skia-157-bazel-rust-mac-toolchain.patch', 'rust mac toolchain')
+}
+elseif ($RustPng) {
     $patch_set += if ($is_android) {
         @(@('skia-157-bazel-rust-android-ndk.patch', 'rust android ndk'),
             @('skia-157-bazel-rust-android-triples.patch', 'rust android triples'),
@@ -1016,6 +1098,84 @@ finally {
 #    rust 갈래에서는 C++ 브리지를 컴파일한 **Bazel 쪽 NDK의 판번**을 함께 적는다 —
 #    Skia 152까지는 r21e가 섞였고(Bazel이 따로 받았다), 157부터는 같은 NDK다. 그것이
 #    args.gn에 남지 않으므로 여기 적는다. ndk는 이 기계의 경로이므로 pack_skia.ps1이 발행할 때 뺀다.
+#
+#    mac의 기록은 Xcode다. Xcode와 SDK의 판번, args의 배포 하한을 적고, rust 갈래에서는
+#    C++ 브리지를 컴파일한 **Bazel 쪽 clang의 판번**을 함께 적는다 — Skia의 Bazel mac
+#    도구사슬은 Xcode의 clang이 아니라 스스로 받은 clang으로 컴파일한다 (헤더와 libc++는
+#    같은 SDK의 것이다). 이 기계의 경로는 적지 않는다.
+if ($is_mac) {
+    $xcode_lines = @(& xcodebuild -version 2>$null)
+    $xcode_version = if ($xcode_lines.Count -ge 2 -and "$($xcode_lines[0])" -match '^Xcode\s+(\S+)' ) {
+        $number = $Matches[1]
+        if ("$($xcode_lines[1])" -match 'Build version\s+(\S+)') { '{0} ({1})' -f $number, $Matches[1] } else { $number }
+    }
+    else { '' }
+    $sdk_version = "$(& xcrun --sdk macosx --show-sdk-version 2>$null)".Trim()
+    # 배포 하한은 args가 아니라 Skia의 GN이 정한다 (gn/skia/BUILD.gn의 -target
+    # arm64-apple-macos11). Windows의 MSVC 판번과 같이 그 결과가 남는 자리는 컴파일 명령이다.
+    $core_ninja = Join-Path $output_directory 'obj/core.ninja'
+    $core_text = if (Test-Path -LiteralPath $core_ninja -PathType Leaf) { Get-Content -Raw -LiteralPath $core_ninja } else { '' }
+    $deployment_target = if ($core_text -match '-target\s+\S+-apple-macos([0-9.]+)') { $Matches[1] }
+    elseif ($core_text -match '-mmacosx-version-min=([0-9.]+)') { $Matches[1] }
+    else { '' }
+    if ($deployment_target -and $deployment_target -notmatch '\.') {
+        $deployment_target += '.0'
+    }
+    if (-not $deployment_target) {
+        Write-Warning "obj/core.ninja names no macOS target; the archives may target the SDK's macOS ($sdk_version)."
+    }
+    $rust_bridge_compiler_version = ''
+    if ($bazelisk) {
+        Push-Location $skia_root
+        try {
+            $output_base = & $bazelisk info output_base 2>$null
+        }
+        finally {
+            Pop-Location
+        }
+        if ($LASTEXITCODE -eq 0 -and $output_base) {
+            $bazel_clang = Get-ChildItem -LiteralPath (Join-Path "$output_base".Trim() 'external') `
+                -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like '*clang_mac*' } |
+                ForEach-Object { Join-Path $_.FullName 'bin/clang' } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+                Select-Object -First 1
+            if ($bazel_clang) {
+                $rust_bridge_compiler_version = "$(& $bazel_clang --version | Select-Object -First 1)".Trim()
+            }
+        }
+        if (-not $rust_bridge_compiler_version) {
+            Write-Warning 'The clang that Bazel used for the rust bridge was not found; toolchain.json leaves it empty.'
+        }
+    }
+    $toolchain_record = [ordered]@{
+        schema                       = 1
+        target                       = $Target
+        toolchain                    = 'xcode'
+        compiler                     = 'clang'
+        compiler_version             = $compiler_version
+        linker                       = 'ld'
+        xcode_version                = $xcode_version
+        macos_sdk                    = $sdk_version
+        macos_deployment_target      = $deployment_target
+        rust_bridge_compiler_version = $rust_bridge_compiler_version
+        configuration                = $Configuration
+        png_codec                    = $png_flavor
+        built_at                     = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    }
+    Set-Content -LiteralPath (Join-Path $output_directory 'toolchain.json') `
+        -Value ($toolchain_record | ConvertTo-Json -Depth 4) -Encoding UTF8
+
+    Write-Output ''
+    Write-Output "Skia build finished: $output_directory"
+    Write-Output ("toolchain      : {0}, Xcode {1}, macOS SDK {2}, deployment target {3}" -f
+        $compiler_version, $xcode_version, $sdk_version, $deployment_target)
+    if ($rust_bridge_compiler_version) {
+        Write-Output "rust bridge    : $rust_bridge_compiler_version (Bazel)"
+    }
+    Write-Output "Verify it with: scripts/verify_skia_root.ps1 -Target $Target"
+    return
+}
 if ($is_android) {
     $ndk_api = if ($argument_text -match '(?m)^\s*ndk_api\s*=\s*(\d+)') { [int]$Matches[1] } else { 21 }
     $rust_bridge_ndk_revision = ''

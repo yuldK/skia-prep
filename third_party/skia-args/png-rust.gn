@@ -1,6 +1,6 @@
 # png 코덱을 rust로 세운다. build_skia.ps1 -RustPng이 고르는 쪽이다.
 #
-# 이 조각은 홀로 쓰지 않는다. skia-ui-{debug,release}.gn·skia-ui-android-arm64-{debug,release}.gn 뒤에
+# 이 조각은 홀로 쓰지 않는다. skia-ui-{debug,release}.gn·skia-ui-{android,mac}-arm64-{debug,release}.gn 뒤에
 # 이어 붙여 하나의 GN args로 넘긴다 — 기본 파일에는 png와 zlib이 없다.
 #
 # **bazelisk가 필요하다.** Skia 148의 rust 경로는 cargo가 아니라 Bazel로 선다:

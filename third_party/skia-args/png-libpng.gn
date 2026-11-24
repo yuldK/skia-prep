@@ -1,6 +1,6 @@
 # png 코덱을 libpng(C)로 세운다. build_skia.ps1이 기본으로 고르는 쪽이다.
 #
-# 이 조각은 홀로 쓰지 않는다. skia-ui-{debug,release}.gn·skia-ui-android-arm64-{debug,release}.gn 뒤에
+# 이 조각은 홀로 쓰지 않는다. skia-ui-{debug,release}.gn·skia-ui-{android,mac}-arm64-{debug,release}.gn 뒤에
 # 이어 붙여 하나의 GN args로 넘긴다 — 기본 파일에는 png와 zlib이 없다.
 #
 # 이쪽을 고르면 APNG(움직이는 png)는 정지 이미지로 나온다. SkPngCodec은 APNG를

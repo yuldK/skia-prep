@@ -1,0 +1,114 @@
+target_os = "mac"
+target_cpu = "arm64"
+is_official_build = false
+is_debug = true
+is_component_build = false
+
+# 컴파일러는 Xcode의 Apple clang이다. GN이 PATH의 clang·clang++을 부르고
+# (gn/BUILDCONFIG.gn), SDK는 gn/find_xcode_sysroot.py가 xcrun으로 찾는다.
+# 경로를 넘길 것이 없어 Windows의 clang_win·Android의 ndk 같은 줄이 없다.
+#
+# 배포 하한(소비자의 MACOSX_DEPLOYMENT_TARGET 하한)은 **macOS 11**이고 여기 적지 않는다.
+# Skia의 GN이 mac arm64에 -target arm64-apple-macos11을 스스로 붙이고(gn/skia/BUILD.gn),
+# 그것이 -mmacosx-version-min을 덮어쓰기 때문이다. rust 쪽도 같은 값이다 — rustc의
+# aarch64-apple-darwin 기본이 11이고, Bazel C++ 도구사슬의 macos12는
+# skia-157-bazel-rust-mac-toolchain.patch가 11로 맞춘다. build_skia.ps1이 그 값을
+# toolchain.json에 적고, verify_skia_root.ps1이 아카이브의 LC_BUILD_VERSION으로 확인한다.
+
+# 다른 대상과 같은 계약이다. 소비자도 clang으로 컴파일하므로 어느 값이든
+# 성립하지만, 이 값은 sk_sp 같은 형의 호출 규약을 바꾸므로 소비자가 따로 맞출
+# 필요가 없는 false로 둔다.
+is_trivial_abi = false
+
+# 기본값이 is_clang이라 mac에서는 저절로 켜진다. 다른 대상과 같은 이유로 끈다 —
+# 새 external도, 새 런타임 동작도 들이지 않는다.
+skia_use_partition_alloc = false
+
+# 기본값이 is_mac이다. 켜 두면 perfetto external을 요구한다.
+skia_use_perfetto = false
+
+# GPU는 Metal(Ganesh)이다. GL은 기본값이 true라 끈다 — Apple이 OpenGL을 폐기했다.
+skia_use_metal = true
+skia_use_gl = false
+skia_use_vulkan = false
+skia_use_direct3d = false
+
+# 시스템 폰트는 CoreText(SkFontMgr_mac_ct)가 연다. 기본값이 is_mac이지만 계약으로
+# 적어 둔다 — verify_skia_root.ps1이 args.gn에서 이 줄을 찾는다. freetype·fontconfig는
+# 쓰지 않는다.
+skia_use_fonthost_mac = true
+skia_use_freetype = false
+skia_use_fontconfig = false
+
+# SVG의 XML 파서다. Windows와 같다 — 그 코드는 부를 때만 링크된다.
+skia_use_expat = true
+skia_use_system_expat = false
+
+# 텍스트 모양 잡기다. HarfBuzz, skunicode(ICU), skshaper, skparagraph가 각각
+# 따로 된 정적 라이브러리로 나온다. 쓰지 않는 소비자는 링크하지 않는다
+# (docs/skia-build.md 6).
+#
+# ICU는 **실행 시점에 플랫폼의 것을 연다** (skia_use_runtime_icu). ICU를
+# 컴파일하지도, 수십 MB의 icudtl.dat를 싣지도 않는다 — ICU external은 헤더로만
+# 쓴다. 여는 것은 모든 macOS에 있는 /usr/lib/libicucore.A.dylib다.
+# Skia의 로더는 그 이름을 몰라 skia-157-runtime-icu-mac.patch가 가르친다.
+# system_* 은 기본값이 is_official_build라 Release에서 저절로 켜지므로 끈다.
+skia_use_harfbuzz = true
+skia_use_system_harfbuzz = false
+skia_use_icu = true
+skia_use_system_icu = false
+skia_use_runtime_icu = true
+skia_use_icu4x = false
+skia_use_apple_unicode = false
+# 다른 대상과 같은 두 번째 백엔드다. macOS에는 ICU가 늘 있어 물러설 일이 드물지만
+# 기능 표를 대상마다 같게 둔다. 소비자는 SkShapers::BestAvailableUnicode()로
+# "ICU 먼저, 안 되면 libgrapheme"을 고른다.
+skia_use_libgrapheme = true
+skia_use_client_icu = false
+# 기본값이 skia_use_harfbuzz다. PDF를 끄므로 지금은 뜻이 없지만, 켜 두면
+# PDF를 켜는 날 harfbuzz가 libskia.a 안으로 들어간다.
+skia_pdf_subset_harfbuzz = false
+
+# 코덱이다. png만 여기 없다 — png-libpng.gn·png-rust.gn 중 하나를 이 파일 뒤에
+# 이어 붙여 정한다. system_* 을 명시하는 이유는 다른 대상과 같다 —
+# 기본값이 is_official_build이라 Release에서 저절로 켜진다.
+skia_use_libjpeg_turbo_decode = true
+skia_use_libjpeg_turbo_encode = true
+skia_use_system_libjpeg_turbo = false
+skia_use_no_jpeg_encode = false
+skia_use_libwebp_decode = true
+skia_use_libwebp_encode = true
+skia_use_system_libwebp = false
+skia_use_no_webp_encode = false
+skia_use_wuffs = true
+skia_use_dng_sdk = false
+skia_use_piex = false
+skia_use_lua = false
+skia_use_jpeg_gainmaps = false
+# AVIF 디코더다 (libavif + libgav1 + libyuv). skia_use_libavif는 SkCodec의 기본
+# 디코더 목록에 AVIF를 넣어 **모든 소비자가 세 라이브러리를 링크하게 만든다.**
+# 그래서 끄고, skia-157-separable-avif.patch의 인자로 avif_decoder를 skia 밖에
+# 따로 세운다. 쓰는 소비자가 SkCodecs::Register(SkAvifDecoder::LibAvif::Decoder())로
+# 등록한다.
+skia_use_libavif = false
+skia_use_crabbyavif = false
+skia_prep_avif_archive = true
+
+# Skia 157의 루트 .gn이 기본 인자로 켠다. 켜지면 SK_ENABLE_YUVA_PACKED_422가 **공개
+# 정의**가 되어 SkYUVAInfo::PlaneConfig 열거형에 kYUYV가 더해진다. 정의를 주지 않는
+# 소비자(luil)와 헤더가 어긋나므로 다른 대상과 같게 끈다. 쓰지 않는 기능이다.
+skia_enable_packed_422_yuv = false
+
+skia_enable_pdf = false
+# SVG와 Skottie다. 모듈마다 따로 된 정적 라이브러리로 나온다 — svg, skottie·sksg·
+# jsonreader, 그리고 둘이 함께 쓰는 skshaper·skresources. 글자는 기본이 primitive
+# shaper이고, 소비자가 HarfBuzz 공장을 넘기면 위의 모양 잡기 길로 간다.
+skia_enable_svg = true
+skia_enable_skottie = true
+skia_enable_skshaper = true
+skia_enable_skparagraph = true
+skia_enable_graphite = false
+skia_enable_tools = false
+skia_enable_android_utils = false
+skia_enable_spirv_validation = false
+skia_enable_gpu_debug_layers = false

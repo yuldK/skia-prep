@@ -7,7 +7,7 @@ param(
     [string]$SkiaRoot,
     [string[]]$Configurations = @('Debug', 'Release'),
     # build_skia.ps1의 -Target과 같은 값이다. 읽는 자리와 판정이 갈린다.
-    [ValidateSet('win-x64', 'android-arm64')]
+    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64')]
     [string]$Target = 'win-x64',
     # build_skia.ps1의 -OutputSuffix와 같은 값이다.
     [string]$OutputSuffix
@@ -21,13 +21,22 @@ if (-not $SkiaRoot) {
     $SkiaRoot = Join-Path $repository_root 'third_party\skia'
 }
 $is_android = $Target -like 'android-*'
-$target_part = if ($is_android) { "$Target-" } else { '' }
+$is_mac = $Target -like 'mac-*'
+$target_part = if ($is_android -or $is_mac) { "$Target-" } else { '' }
 
 # win-x64는 luil CMakeLists.txt의 LUIL_SKIA_COMPONENTS에서 png 갈래 몫을 뺀 목록이다
 # (파일 이름 그대로). android-arm64는 build_skia.ps1이 내는 것 전부다 — libpng과
 # zlib은 freetype이 끌어오므로 png 갈래와 무관하게 이쪽에 있고, cpu-features는
-# NDK의 sources/android/cpufeatures를 Skia가 컴파일한 것이다.
-if ($is_android) {
+# NDK의 sources/android/cpufeatures를 Skia가 컴파일한 것이다. mac-arm64는 Windows와 같은
+# 모양이다 — GPU의 external이 없고(Metal은 시스템의 것이다), libpng·zlib은 libpng 갈래에만 있다.
+if ($is_mac) {
+    $components = @(
+        'libskia.a', 'libskcms.a',
+        'libjpeg.a', 'libjpeg12.a', 'libjpeg16.a',
+        'libwebp.a', 'libwebp_sse41.a', 'libwuffs.a')
+    $libpng_components = @('libpng.a', 'libzlib.a')
+}
+elseif ($is_android) {
     $components = @(
         'libskia.a', 'libskcms.a',
         'libjpeg.a', 'libjpeg12.a', 'libjpeg16.a',
@@ -55,8 +64,8 @@ $components += @($feature_map.features.PSObject.Properties |
 # rust png 갈래는 152 아래에서 아예 서지 않는다 (5.3). 패치는 157에 맞춰 떴다.
 $minimum_milestone = 157
 # win-x64는 luil CMakeLists.txt의 LUIL_SKIA_REQUIRED_ARGUMENTS와 같은 목록이다.
-# android-arm64는 luil에 아직 짝이 없다 — 이 저장소의 Android args가 켜는 것을
-# 그대로 요구한다 (docs/skia-build.md 8).
+# android-arm64·mac-arm64는 luil에 아직 짝이 없다 — 이 저장소의 args가 켜는 것을
+# 그대로 요구한다 (docs/skia-build.md 8·9).
 # png은 둘 중 하나라 여기 없다 — 아래에서 따로 판정한다.
 $codec_arguments = @(
     @{ name = 'skia_use_libjpeg_turbo_decode'; reason = 'jpeg decoding' },
@@ -67,7 +76,13 @@ $codec_arguments = @(
     @{ name = 'skia_use_harfbuzz'; reason = 'the text feature (SkShapers::HB, SkParagraph)' },
     @{ name = 'skia_use_runtime_icu'; reason = 'SkUnicode loads the platform ICU; no ICU data ships' },
     @{ name = 'skia_prep_avif_archive'; reason = 'AVIF in its own archive, outside the default decoder list' })
-$required_arguments = if ($is_android) {
+$required_arguments = if ($is_mac) {
+    @(
+        @{ name = 'skia_use_metal'; reason = 'the macOS GPU backend' },
+        @{ name = 'skia_use_fonthost_mac'; reason = 'system fonts (CoreText)' },
+        @{ name = 'skia_use_expat'; reason = 'the svg XML parser' }) + $codec_arguments
+}
+elseif ($is_android) {
     @(
         @{ name = 'skia_use_vulkan'; reason = 'the Android GPU backend' },
         @{ name = 'skia_use_freetype'; reason = 'system fonts (SkFontMgr_android)' },
@@ -168,6 +183,74 @@ public static class SkiaArchiveElf {
         return new long[] { aarch64, other, first_other };
     }
 }
+
+// ar 아카이브의 Mach-O member가 무슨 CPU용이고 배포 하한이 얼마인지 센다 (mac 대상).
+//
+// BSD ar는 긴 이름을 "#1/<길이>"로 적고 이름을 본문 앞에 붙인다. 그만큼 건너뛰고 본다.
+// 하한은 LC_BUILD_VERSION(0x32)의 minos, 옛 오브젝트는 LC_VERSION_MIN_MACOSX(0x24)의
+// version이다. 둘 다 xxxx.yy.zz를 (주 << 16) | (부 << 8) | 수로 적는다.
+public static class SkiaArchiveMachO {
+    // 반환: [arm64 member 수, 다른 CPU member 수, 첫 다른 cputype, 가장 높은 하한, 하한이 없는 member 수].
+    public static long[] Inspect(string path) {
+        long arm64 = 0, other = 0, first_other = -1, max_min = 0, no_min = 0;
+        using (FileStream file = File.OpenRead(path))
+        using (BinaryReader reader = new BinaryReader(file)) {
+            byte[] magic = reader.ReadBytes(8);
+            if (System.Text.Encoding.ASCII.GetString(magic) != "!<arch>\n") {
+                throw new InvalidDataException("not an ar archive: " + path);
+            }
+            while (file.Position + 60 <= file.Length) {
+                byte[] header = reader.ReadBytes(60);
+                string name = System.Text.Encoding.ASCII.GetString(header, 0, 16).TrimEnd(' ');
+                long size = long.Parse(System.Text.Encoding.ASCII.GetString(header, 48, 10).Trim());
+                long start = file.Position;
+                long body = start;
+                if (name.StartsWith("#1/")) {
+                    body += long.Parse(name.Substring(3));
+                }
+                long length = start + size - body;
+                file.Position = body;
+                if (length >= 32 && reader.ReadUInt32() == 0xFEEDFACF) {
+                    int cputype = reader.ReadInt32();
+                    reader.ReadInt32();                 // cpusubtype
+                    reader.ReadUInt32();                // filetype
+                    uint ncmds = reader.ReadUInt32();
+                    reader.ReadUInt32();                // sizeofcmds
+                    reader.ReadUInt32();                // flags
+                    reader.ReadUInt32();                // reserved
+                    if (cputype == 0x0100000C) {
+                        arm64++;
+                    } else {
+                        other++;
+                        if (first_other < 0) { first_other = cputype; }
+                    }
+                    long found = -1;
+                    for (uint i = 0; i < ncmds && file.Position + 8 <= body + length; i++) {
+                        long command_start = file.Position;
+                        uint cmd = reader.ReadUInt32();
+                        uint cmdsize = reader.ReadUInt32();
+                        if (cmd == 0x32) {
+                            reader.ReadUInt32();        // platform
+                            found = reader.ReadUInt32();
+                        } else if (cmd == 0x24) {
+                            found = reader.ReadUInt32();
+                        }
+                        if (cmdsize < 8) { break; }
+                        file.Position = command_start + cmdsize;
+                    }
+                    if (found < 0) { no_min++; } else if (found > max_min) { max_min = found; }
+                }
+                file.Position = start + size + (size & 1);
+            }
+        }
+        return new long[] { arm64, other, first_other, max_min, no_min };
+    }
+
+    public static string Version(long encoded) {
+        return string.Format("{0}.{1}", encoded >> 16, (encoded >> 8) & 0xFF) +
+               ((encoded & 0xFF) != 0 ? "." + (encoded & 0xFF) : "");
+    }
+}
 '@
 
 function Add-Result {
@@ -225,8 +308,8 @@ function Find-Dumpbin {
     return ''
 }
 
-# COFF 지시문 검사는 Windows 대상의 것이다. Android 아카이브는 ELF라 dumpbin이 읽지 못한다.
-$dumpbin = if ($is_android) { '' } else { Find-Dumpbin }
+# COFF 지시문 검사는 Windows 대상의 것이다. Android(ELF)·mac(Mach-O) 아카이브는 dumpbin이 읽지 못한다.
+$dumpbin = if ($is_android -or $is_mac) { '' } else { Find-Dumpbin }
 
 foreach ($configuration in $Configurations) {
     Write-Output ''
@@ -293,7 +376,14 @@ foreach ($configuration in $Configurations) {
                 (-not ($arguments_text -match ('{0}\s*=\s*true' -f $forbidden.name))) `
                 ('must stay false — ' + $forbidden.reason)
         }
-        if ($is_android) {
+        if ($is_mac) {
+            # mac의 도구사슬은 Xcode다. args에 경로가 없다 — 말할 것은 대상뿐이다.
+            # 배포 하한은 Skia의 GN이 정하므로 아래에서 toolchain.json과 아카이브로 본다.
+            $target_ok = $arguments_text -match 'target_os\s*=\s*"mac"' -and
+                $arguments_text -match 'target_cpu\s*=\s*"arm64"'
+            Add-Result "$configuration/target" $target_ok 'target_os = "mac", target_cpu = "arm64"'
+        }
+        elseif ($is_android) {
             # Android의 도구사슬은 NDK다. args가 대상과 NDK를 함께 말해야 한다.
             $target_ok = $arguments_text -match 'target_os\s*=\s*"android"' -and
                 $arguments_text -match 'target_cpu\s*=\s*"arm64"'
@@ -339,10 +429,50 @@ foreach ($configuration in $Configurations) {
         }
     }
 
+    # mac에서 아카이브에 물을 것은 CPU와 배포 하한이다. GN이 세운 것은 GN의 -target을
+    # 따르고, 어긋날 수 있는 것은 Bazel이 세운 rust 아카이브다 — GN이 넘기는 플랫폼이
+    # 빠지면 호스트용으로 서고, 그 C++ 도구사슬의 하한(원래 macos12)이 GN과 다르면
+    # 소비자의 링크가 "built for newer macOS version" 경고를 낸다. 하한이
+    # toolchain.json의 macos_deployment_target(build_skia.ps1이 GN의 컴파일 명령에서 읽는다)보다
+    # 높은 member가 하나라도 있으면 실패다.
+    if ($is_mac) {
+        $toolchain_file = Join-Path $directory 'toolchain.json'
+        $declared = ''
+        if (Test-Path -LiteralPath $toolchain_file -PathType Leaf) {
+            $declared = "$((Get-Content -Raw -LiteralPath $toolchain_file | ConvertFrom-Json).macos_deployment_target)"
+        }
+        $minimum = if ($declared -match '^([0-9]+)(?:\.([0-9]+))?') {
+            ([long]$Matches[1] -shl 16) -bor ([long]$(if ($Matches[2]) { $Matches[2] } else { 0 }) -shl 8)
+        }
+        else { 0 }
+        Add-Result "$configuration/deployment target" ($minimum -gt 0) `
+            $(if ($minimum) { "macOS $declared (toolchain.json)" } else { 'toolchain.json gives no macos_deployment_target; rebuild with build_skia.ps1' })
+        $macho_archives = @('libskia.a')
+        if ($png_codec -eq 'rust') {
+            $macho_archives += $rust_png_components
+        }
+        foreach ($component in $macho_archives) {
+            $library = Join-Path $directory $component
+            if (-not (Test-Path -LiteralPath $library -PathType Leaf)) {
+                continue
+            }
+            $counts = [SkiaArchiveMachO]::Inspect($library)
+            $ok = $counts[0] -gt 0 -and $counts[1] -eq 0
+            $detail = if ($counts[1] -eq 0) { '{0} arm64 objects' -f $counts[0] }
+            else { '{0} objects are not arm64 (cputype 0x{1:X}); the rust build missed the mac platform' -f $counts[1], $counts[2] }
+            Add-Result "$configuration/$component CPU" $ok $detail
+            $highest = [SkiaArchiveMachO]::Version($counts[3])
+            $min_ok = $minimum -gt 0 -and $counts[3] -le $minimum
+            Add-Result "$configuration/$component minimum macOS" $min_ok `
+                ('highest {0} (declared {1}){2}' -f $highest, [SkiaArchiveMachO]::Version($minimum),
+                    $(if ($counts[4]) { ", $($counts[4]) objects carry none" } else { '' }))
+        }
+    }
+
     # args.gn은 "그렇게 gen했다"는 말이다. 아카이브 자신에게 무엇이 컴파일했는지
     # 묻는 자리가 따로 있어야 한다 — .llvm_addrsig가 clang만 내는 section이다.
     $archive = Join-Path $directory 'skia.lib'
-    if (-not $is_android -and (Test-Path -LiteralPath $archive)) {
+    if (-not $is_android -and -not $is_mac -and (Test-Path -LiteralPath $archive)) {
         $built_by_clang = [SkiaArchiveMarker]::Contains($archive, '.llvm_addrsig')
         Add-Result "$configuration/built by clang-cl" $built_by_clang `
             $(if ($built_by_clang) { 'skia.lib carries LLVM sections' }
@@ -354,7 +484,12 @@ foreach ($configuration in $Configurations) {
     $toolchain_file = Join-Path $directory 'toolchain.json'
     if (Test-Path -LiteralPath $toolchain_file -PathType Leaf) {
         $toolchain = Get-Content -Raw -LiteralPath $toolchain_file | ConvertFrom-Json
-        $summary = if ($is_android) {
+        $summary = if ($is_mac) {
+            '{0}, Xcode {1}, macOS SDK {2}, deployment target {3}, rust bridge {4}' -f $toolchain.compiler_version,
+            $toolchain.xcode_version, $toolchain.macos_sdk, $toolchain.macos_deployment_target,
+            $toolchain.rust_bridge_compiler_version
+        }
+        elseif ($is_android) {
             'NDK r{0}, ndk_api {1}, rust bridge NDK r{2}' -f $toolchain.ndk_revision,
             $toolchain.ndk_api, $toolchain.rust_bridge_ndk_revision
         }
