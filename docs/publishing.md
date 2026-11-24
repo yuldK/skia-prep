@@ -9,7 +9,7 @@ luil이 `skia_use_rust_png_decode=true`를 요구 인자로 못 박았고, APNG�
 그것뿐이다.
 
 1~6장은 `win-x64`의 절차다. `android-arm64`는 같은 스크립트를 Linux에서 돌리며,
-다른 것만 7장에 모았다.
+다른 것만 7장에 모았다. `mac-arm64`는 Mac에서 돌리고 8장에 모았다.
 
 ## 1. 준비
 
@@ -322,3 +322,47 @@ Windows의 태그(`skia-157-b94213a11b3a-r1`)에는 대상을 넣지 않는다. 
 luil에는 아직 Android 핀이 없다. luil이 Android를 세우기 시작할 때 이 자산을 가리키는
 핀을 따로 둔다 — Windows 핀(`third_party/skia-prep.json`)은 `target`이 `win-x64`로
 고정돼 있다.
+
+## 8. macOS 패키지
+
+준비와 이유는 [skia-build.md](skia-build.md) 9장에 있다. **Apple Silicon Mac에서**, Xcode가
+`xcode-select`로 골라진 상태로 같은 스크립트를 `pwsh`로 돌린다.
+
+```bash
+pwsh scripts/build_skia.ps1 -Target mac-arm64 -Configuration Release -RustPng
+pwsh scripts/build_skia.ps1 -Target mac-arm64 -Configuration Debug   -RustPng
+pwsh scripts/verify_skia_root.ps1 -Target mac-arm64
+pwsh scripts/pack_skia.ps1 -Target mac-arm64 -Configuration Release -Archive
+pwsh scripts/pack_skia.ps1 -Target mac-arm64 -Configuration Debug -Destination build/skia-package-debug -Archive
+pwsh scripts/probe_features.ps1 -Target mac-arm64 -PackageRoot build/skia-package -Configuration Release
+pwsh scripts/probe_features.ps1 -Target mac-arm64 -PackageRoot build/skia-package-debug -Configuration Debug
+```
+
+`verify_skia_root.ps1`이 mac에서 따로 보는 것은 아카이브의 CPU와 배포 하한(macOS 11)이다.
+`pack_skia.ps1`은 rust 아카이브를 걷는 데 Bazel이 받아 둔 `llvm-objcopy`를 쓴다 — Bazel
+캐시를 지웠다면 `-ObjcopyPath`로 다른 LLVM의 것을 준다 (skia-build.md 9.5).
+
+**기능 probe가 이 Mac에서 바로 돈다.** Android와 달리 기기가 따로 없다. 열한 갈래가
+Release·Debug 모두 `passed`여야 올린다. `metal` 갈래가 이 Mac의 GPU로 Ganesh를 돌린다.
+
+157 r1 (2026-11-24):
+
+| 자산 | 압축 | 푼 뒤 |
+| --- | --- | --- |
+| `skia-prep-b94213a11b3a-r1-mac-arm64-release.zip` | 11.5 MB | 32.5 MB |
+| `skia-prep-b94213a11b3a-r1-mac-arm64-debug.zip` | 177.3 MB | 694.0 MB |
+
+**태그에 대상을 넣는다** (7장과 같은 이유).
+
+```bash
+gh release create skia-157-b94213a11b3a-mac-arm64-r1 \
+    build/skia-prep-b94213a11b3a-r1-mac-arm64-release.zip \
+    build/skia-prep-b94213a11b3a-r1-mac-arm64-debug.zip \
+    --title "Skia 157 (b94213a11b3a) mac-arm64 r1" \
+    --latest=false \
+    --notes-file NOTES.md
+```
+
+luil에는 아직 macOS 핀이 없다. luil이 macOS를 세우기 시작할 때 이 자산을 가리키는 핀을
+따로 둔다. 소비자는 framework 다섯(`CoreFoundation`·`CoreGraphics`·`CoreText`·`Metal`·
+`Foundation`)을 링크하고 `SK_METAL`을 정의한다 (skia-build.md 9.6).

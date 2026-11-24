@@ -15,16 +15,18 @@ bazel 캐시 15 GB — 을 이 저장소 하나가 떠안는다. `luil`을 쓰�
 | --- | --- | --- | --- | --- |
 | `win-x64` (157 r1) | Windows | clang-cl | Direct3D | 21.1 MB · 148.2 MB (+ Release 심볼 84.9 MB) |
 | `android-arm64` (157 r1) | Linux (WSL2) | NDK r27d clang | Vulkan | 18.5 MB · 57.2 MB |
+| `mac-arm64` (157 r1) | macOS (Apple Silicon) | Xcode clang | Metal | 11.5 MB · 177.3 MB |
 
 Skia는 157(`b94213a11b`, chrome/m157)이다.
 
-두 대상 모두 SVG(`SkSVGDOM`), 텍스트 모양 잡기(HarfBuzz·시스템 ICU·SkParagraph),
+세 대상 모두 SVG(`SkSVGDOM`), 텍스트 모양 잡기(HarfBuzz·시스템 ICU·SkParagraph),
 ICU가 없는 플랫폼의 fallback(libgrapheme), Skottie, AVIF 디코드를 **기능별로 떨어진
 아카이브**로 싣는다. 쓰지 않는 기능의 아카이브는 링크하지 않아도 되고, 기능 아카이브가
 늘어도 기존 목록만 링크한 실행 파일의 크기는 그대로다. 표와 쓰는 법은
 [docs/skia-build.md](docs/skia-build.md) 6장에 있다.
 
-iOS는 아직 없다. Skia의 iOS Bazel 도구사슬이 macOS에서만 돌아 Mac이 필요하다.
+iOS는 아직 없다. Skia의 iOS Bazel 도구사슬이 macOS에서만 돌아 Mac이 필요하다 —
+macOS 대상이 서는 Mac이면 그 자리다.
 
 > 이 저장소가 내는 것은 **Google과 무관한 비공식 빌드**다. Skia의 BSD-3-Clause 3항에
 > 따라 저작권자와 기여자의 이름을 이 배포물의 홍보에 쓰지 않는다. Skia는 Google이
@@ -46,7 +48,7 @@ NOTICE.md             정적으로 들어간 모든 것의 고지를 모은 한 
 NOTICE.json           아카이브마다 담긴 것과 기능마다 링크되는 것의 고지 id
 licenses/rust/        rust 갈래에서만. Rust 표준 라이브러리 고지
 VERSION.json          Skia commit·밀번·png 갈래·도구사슬·패키지 판번·파일별 SHA-256
-out/skia-ui-release/  *.lib *.a args.gn toolchain.json   (Android는 *.a뿐이다)
+out/skia-ui-release/  *.lib *.a args.gn toolchain.json   (Android·macOS는 *.a뿐이다)
 out/skia-ui-debug/    (Debug 패키지)
 ```
 
@@ -138,6 +140,29 @@ Skia 157을 그대로는 세울 수 없어 패치 셋을 건다 (Bazel이 쓰는
 `tools/android_probe.cpp`가 기기 위에서 래스터·rust png·시스템 글꼴·Vulkan을 밟아
 확인한다 (실기기에서 통과).
 
+### macOS
+
+같은 스크립트를 **Apple Silicon Mac에서** `pwsh`로 돌린다. Xcode(Command Line Tools만으로는
+안 된다)가 컴파일하고, rust png의 Bazel mac 도구사슬도 그 Xcode의 SDK를 쓴다.
+submodule은 GPU·글꼴의 것이 하나도 들지 않는다 — Metal·CoreText·ICU(`libicucore`)가
+모두 시스템의 것이다.
+
+```bash
+pwsh scripts/build_skia.ps1 -Target mac-arm64 -Configuration Release -RustPng
+pwsh scripts/build_skia.ps1 -Target mac-arm64 -Configuration Debug   -RustPng
+pwsh scripts/verify_skia_root.ps1 -Target mac-arm64
+pwsh scripts/pack_skia.ps1 -Target mac-arm64 -Configuration Release -Archive
+pwsh scripts/pack_skia.ps1 -Target mac-arm64 -Configuration Debug -Destination build/skia-package-debug -Archive
+pwsh scripts/probe_features.ps1 -Target mac-arm64 -PackageRoot build/skia-package -Configuration Release
+```
+
+배포 하한은 macOS 11이다. rust 갈래에는 패치가 하나 든다 — Skia가 받아 쓰는 lld 22가
+macOS 27 SDK의 `.tbd`를 읽지 못해 Bazel이 Xcode의 `ld`로 링크하게 하고, Bazel C++의
+하한을 GN과 같은 11로 맞춘다. 소비자는 framework 다섯(`CoreFoundation`·`CoreGraphics`·
+`CoreText`·`Metal`·`Foundation`)을 링크하고 `SK_METAL`을 정의한다. 기능 probe가 그 Mac에서
+바로 돌아 열한 갈래(Metal 포함)가 Release·Debug 모두 통과했다. 자세한 것은
+[docs/skia-build.md](docs/skia-build.md) 9장에 있다.
+
 발행 절차는 [docs/publishing.md](docs/publishing.md)에 있다.
 
 ## 라이선스
@@ -153,8 +178,10 @@ MIT / Apache-2.0 / 0BSD / Zlib crate들. 상호주의 조항은 없다.
 
 기능별 아카이브가 더하는 것: Old MIT(HarfBuzz), Unicode License V3(ICU — 컴파일한
 헤더의 몫이다. 데이터는 싣지 않는다), BSD-2(libavif), Apache-2.0(libgav1),
-BSD-3 + 특허 허여(libyuv), ISC(libgrapheme), MIT(Windows의 Expat). 앱이 실을 고지는 쓰는 기능에 따라
+BSD-3 + 특허 허여(libyuv), ISC(libgrapheme), MIT(Windows·macOS의 Expat). 앱이 실을 고지는 쓰는 기능에 따라
 다르다 — 패키지의 `NOTICE.json`이 기능마다 적는다.
+
+macOS 패키지는 더하는 것이 없다 — GPU·글꼴·ICU가 모두 시스템의 것이다.
 
 Android 패키지에는 넷이 더 들어간다: MIT(Vulkan Memory Allocator·Expat),
 Apache-2.0(NDK의 cpu-features), 그리고 FreeType. FreeType은 FTL과 GPLv2 중 하나를

@@ -3,7 +3,7 @@
 luil은 Skia를 자동으로 내려받거나 빌드하지 않는다.
 
 1~7장은 Windows 대상(`win-x64`)의 것이다. Android 대상(`android-arm64`)은 Linux에서
-세우고, 다른 것만 8장에 모았다.
+세우고, 다른 것만 8장에 모았다. macOS 대상(`mac-arm64`)은 Mac에서 세우고 9장에 모았다.
 
 사용자가 1회 직접 빌드하고, CMake는 그 산출물을 검사해 연결만 한다.
 
@@ -606,6 +606,9 @@ r3(win-x64)·r2(android-arm64)부터 패키지에 기능이 넷 더 든다. 원�
 | skottie | `skottie.lib` `sksg.lib` `jsonreader.lib` `skresources.lib` `skshaper.lib` | `libskottie.a` `libsksg.a` `libjsonreader.a` `libskresources.a` `libskshaper.a` | core | 없음 |
 | avif | `avif_decoder.lib` `libavif.lib` `libgav1.lib` `libyuv.lib` | `libavif_decoder.a` `libavif.a` `libgav1.a` `libyuv.a` | core | 없음 (등록, 6.3) |
 | png·jpeg 인코드 | core에 있다 | core에 있다 | — | 없음 |
+
+`mac-arm64`의 기능 아카이브는 이름까지 `android-arm64`와 같다. core만 다르다 — Windows처럼
+`libexpat.a`가 없고(`libskia.a`가 담는다) freetype·libpng·zlib·cpu-features도 없다 (9.4).
 
 - **시스템 라이브러리는 새로 들지 않는다.** text의 ICU는 실행 시점에 연다 —
   Windows는 `LoadLibraryExW`(System32의 `icu.dll`), Android는 `dlopen`(`libicu.so`).
@@ -1221,3 +1224,226 @@ rust 쪽을 빌드 때 고치지 않는 것은, Bazel의 C++과 rustc 양쪽에 
 `c:\users\<사용자>`와 사용자 이름 폴더 아래의 저장소 경로를 놓쳤다. 지금은 두 대상의
 Release·Debug 모두 이 검사를 지나고, 따로 훑어도 사용자 이름이 대소문자 어느 쪽으로도
 나오지 않는다.
+
+
+## 9. macOS 대상 (2026-11-24)
+
+`-Target mac-arm64`가 Apple Silicon Mac용 패키지를 세운다. 발행하는 갈래는 다른 대상과
+같은 rust png다. 이 장의 실측은 macOS 27.2(arm64), Xcode 27.2(Apple clang 21), Skia
+157(`b94213a11b`)에서 했다. 결과물이 그 Mac에서 기능 probe 열한 갈래를 Release·Debug
+모두 통과했다 (9.6).
+
+Intel Mac(`mac-x64`)은 세우지 않는다. macOS 27이 Apple Silicon만 지원하고, Skia의 GN과
+Bazel이 x64 갈래를 갖고 있어 뒷날 더하는 길은 열려 있다.
+
+### 9.1 왜 Mac에서 세우는가
+
+GN 쪽은 Xcode의 clang과 macOS SDK로 컴파일하고, rust png의 Bazel mac 도구사슬도 그
+기계의 Xcode SDK를 symlink한다 (`toolchain/download_mac_toolchain.bzl`). 그래서 Mac이
+든다. `build_skia.ps1`이 호스트를 보고 맞지 않으면 시작 전에 멈춘다. 반대로 Android
+대상은 Mac에서 세우지 못한다 (8.1의 이유).
+
+### 9.2 준비
+
+| 항목 | 비고 |
+| --- | --- |
+| Xcode | Command Line Tools만으로는 안 된다 — Metal과 macOS SDK가 Xcode에 있다. `xcode-select -p`가 Xcode를 가리켜야 한다 |
+| `pwsh` | 7 이상 |
+| `gn`·`ninja` | Skia의 `bin/fetch-gn`·`bin/fetch-ninja`가 mac-arm64판을 받는다 (Skia 트리 안, Skia의 `.gitignore`가 무시한다). ninja는 Skia가 고정한 1.12.1이다 |
+| `bazelisk` | `bazelisk-darwin-arm64`를 `third_party/skia-tools/bazelisk`나 `~/bin/bazelisk`로. `-RustPng`에만 든다 |
+| Python 3 | Xcode의 `/usr/bin/python3`이면 된다 |
+
+Bazel 캐시는 `/private/var/tmp/_bazel_<사용자>`에 놓인다. 두 구성을 세운 뒤 2 GB 남짓이다
+(Android·Windows보다 작다 — Bazel이 받는 C++ 도구사슬이 clang 하나고, SDK는 Xcode의 것을
+symlink한다).
+
+submodule은 Windows의 셋(D3D12MA·SPIRV 둘)도, Android의 셋(VMA·freetype)도 들지 않는다.
+GPU(Metal)·글꼴(CoreText)·ICU(libicucore)가 모두 시스템의 것이다.
+
+```bash
+git submodule update --init third_party/skia
+git submodule update --init third_party/skia-externals/libjpeg-turbo
+git submodule update --init third_party/skia-externals/libwebp
+git submodule update --init third_party/skia-externals/wuffs
+git submodule update --init third_party/skia-externals/expat
+git submodule update --init third_party/skia-externals/harfbuzz
+git submodule update --init third_party/skia-externals/icu
+git submodule update --init third_party/skia-externals/libavif
+git submodule update --init third_party/skia-externals/libgav1
+git submodule update --init third_party/skia-externals/libyuv
+git submodule update --init third_party/skia-externals/libgrapheme
+# unicodetools는 2장처럼 UCD 디렉터리만 받는다. libpng·zlib은 libpng 갈래에만 든다
+```
+
+### 9.3 빌드·검증·패키징
+
+```bash
+pwsh scripts/build_skia.ps1 -Target mac-arm64 -Configuration Release -RustPng
+pwsh scripts/build_skia.ps1 -Target mac-arm64 -Configuration Debug   -RustPng
+pwsh scripts/verify_skia_root.ps1 -Target mac-arm64
+pwsh scripts/pack_skia.ps1 -Target mac-arm64 -Configuration Release -Archive
+pwsh scripts/pack_skia.ps1 -Target mac-arm64 -Configuration Debug -Destination build/skia-package-debug -Archive
+pwsh scripts/probe_features.ps1 -Target mac-arm64 -PackageRoot build/skia-package -Configuration Release
+pwsh scripts/probe_features.ps1 -Target mac-arm64 -PackageRoot build/skia-package-debug -Configuration Debug
+```
+
+산출 자리는 `out/skia-ui-mac-arm64-{구성}`이고, 패키지 안에서는 다른 대상과 같은
+`out/skia-ui-{구성}`이다.
+
+| 자산 | 압축 | 푼 뒤 |
+| --- | --- | --- |
+| `skia-prep-b94213a11b3a-r1-mac-arm64-release.zip` | 11.5 MB | 32.5 MB |
+| `skia-prep-b94213a11b3a-r1-mac-arm64-debug.zip` | 177.3 MB | 694.0 MB |
+
+Debug가 큰 것은 Mach-O의 DWARF가 압축되지 않기 때문이다 (`libskia.a` 380 MB,
+`libharfbuzz.a` 148 MB). Apple의 ld는 압축된 디버그 섹션을 받지 않아 `-gz`를 쓸 수 없다.
+
+`verify_skia_root.ps1`이 mac에서 따로 보는 것은 **아카이브의 CPU와 배포 하한**이다. ar
+member를 하나씩 걸어 Mach-O의 `cputype`과 `LC_BUILD_VERSION`의 `minos`를 읽는다.
+`libskia.a`와 rust 아카이브 둘이 모두 arm64이고 하한이 `toolchain.json`의
+`macos_deployment_target`(11.0) 이하여야 통과한다.
+
+같은 빌드를 다시 싸면 같은 zip이 나온다 (Release로 두 번 싸서 SHA-256이 같았다).
+rust 아카이브를 고치는 Xcode의 `ar`·`ranlib`가 지금 시각을 적으므로 `pack_skia.ps1`이
+`ZERO_AR_DATE=1`을 주고 부른다.
+
+### 9.4 다른 대상과 다른 것
+
+**args**는 `skia-ui-mac-arm64-{release,debug}.gn`이다. 계약은 같다 (`is_trivial_abi = false`,
+partition_alloc 끔, 코덱·기능 구성).
+
+| | Windows | Android | macOS |
+| --- | --- | --- | --- |
+| GPU | Direct3D | Vulkan | **Metal** (Ganesh) |
+| 글꼴 | DirectWrite | freetype + expat | **CoreText** (`SkFontMgr_New_CoreText`) |
+| 컴파일러 | clang-cl, `clang_win` | NDK r27d의 clang, `ndk` | **Xcode의 Apple clang** (PATH의 `clang`; 넘길 경로가 없다) |
+| 하한 | — | `ndk_api = 26` | **macOS 11** (Skia의 GN이 정한다, 아래) |
+| 텍스트의 ICU | `icu.dll` | `libicu.so` (API 31+) | **`/usr/lib/libicucore.A.dylib`** (모든 macOS) |
+| `libskia.a`의 모양 | 완전한 정적 라이브러리 (expat·코덱을 담는다) | 따로 된 `libexpat.a`를 core가 링크한다 | Windows와 같다 — `libexpat.a`를 싣지 않는다 |
+
+`skia_use_perfetto`(기본값이 `is_mac`)와 `skia_use_gl`(기본값 true)을 끈다.
+`skia_use_fonthost_mac`은 기본값이 이미 true지만 args에 적는다 — `verify_skia_root.ps1`이
+그 줄을 찾는다.
+
+**배포 하한은 macOS 11이다.** args가 정하지 않는다. Skia의 GN이 mac arm64에
+`-target arm64-apple-macos11`을 스스로 붙이고(`gn/skia/BUILD.gn`), 그것이
+`-mmacosx-version-min`을 덮어쓴다 (처음에 12를 주었다가 `overriding` 경고로 알았다).
+rustc의 `aarch64-apple-darwin` 기본도 11이다. 어긋났던 것은 Bazel C++ 도구사슬의
+`--target=arm64-apple-macos12` 하나라 패치가 11로 맞춘다 (아래). `build_skia.ps1`은 그 값을
+GN이 만든 `obj/core.ninja`에서 읽어 `toolchain.json`에 적는다.
+
+**패치**는 공통 다섯에 rust 갈래의 하나가 더해진다.
+
+- `runtime-icu-system`(공통) — macOS의 `libicucore.A.dylib`도 연다. 이름에 판번이 없어
+  Android·Windows와 같은 길이다. macOS 27.2에서 필요한 함수 30개와 선택 셋이 모두
+  찾아진다. 처음에는 mac 몫을 따로 된 패치로 그 위에 겹쳐 걸었는데, "이미 걸렸는가"
+  판정(`git apply --reverse --check`)이 아래 패치를 걸리지 않은 것으로 보아 두 번째
+  실행에서 멈췄다. 그래서 한 패치에 합쳤다. Windows·Android의 코드는 `#if`로 갈려 그대로다.
+  **옛 패치가 걸린 Skia 트리**(이 변경 전에 Windows·WSL에서 세운 것)는 새 패치를 "걸리지 않은
+  것"으로 보고 다시 걸다 멈춘다. 그 트리는 한 번 되돌린다:
+  `git -C third_party/skia checkout -- .` 와 `modules/skshaper/src/SkShaper_legacy.cpp` 삭제.
+- `bazel-rust-mac-toolchain`(rust) — `toolchain/mac_toolchain_config.bzl`의 두 줄.
+  - **링크를 Xcode의 `ld`로 한다.** Skia의 Bazel mac 도구사슬은 스스로 받은 clang 22와
+    `ld64.lld`로 링크하는데, lld 22가 macOS 27 SDK의 TAPI 파일을 읽지 못한다
+    (`libSystem.tbd: unknown architecture arm64e.x1-macos`). 그래서 첫 exec 도구
+    (rules_rust의 `process_wrapper`)의 링크에서 멈췄다. 여기서 링크하는 것은 exec 도구
+    (process_wrapper·build script·proc macro)뿐이고, 발행하는 아카이브는 정적 라이브러리라
+    링크하지 않으므로 내용이 링커에 달려 있지 않다.
+  - **C++ 하한을 macOS 11로** 둔다 (위).
+
+플랫폼은 Skia의 `BUILD.gn`이 mac에서는 원래 Bazel에 넘기고(`mac_arm64_hermetic`),
+산출물 이름도 Linux와 같은 `lib*.a`라 Android·Windows의 나머지 패치는 들지 않는다.
+
+**rust 쪽 C++ 브리지는 다른 clang으로 컴파일된다.** GN은 Xcode의 Apple clang 21,
+Bazel은 스스로 받은 clang 22다. 헤더와 libc++는 같은 SDK의 것이라 ABI는 같다.
+`toolchain.json`의 `rust_bridge_compiler_version`이 뒤엣것을 적는다.
+
+**crate 판번이 Windows와 다르다.** mac은 `MODULE.bazel`을 고치지 않아 Skia가 고정한
+lock 그대로 선다 (`cc` 1.4.4 등). 고지 사본은 `third_party/rust-licenses/mac-arm64`이고,
+Rust 표준 라이브러리의 고지는 `rust_host_tools`가 아니라 대상 도구사슬 저장소
+(`rust_macos_aarch64__aarch64-apple-darwin__stable_tools`)에 있다 — arm64 Mac은 호스트와
+대상이 같아 rules_rust가 `rust_host_tools`를 따로 두지 않는다. `refresh_rust_licenses.ps1`과
+`pack_skia.ps1`이 두 자리를 다 본다.
+
+### 9.5 rust 아카이브를 걷는 법
+
+8.5·8.7과 같은 일을 한다 — 디버그 정보를 걷고, Skia·libc++ 오브젝트 중 다른 아카이브에도
+있는 것을 뺀다 (Release 586개, 남는 강한 "중복"은 clang이 weak로 내는 `___clang_call_terminate`
+하나다). 다만 Xcode에는 `llvm-objcopy`·`llvm-ar`가 없고, 있는 도구 중 둘은 쓸 수 없었다.
+
+- **Xcode의 `strip -S`는 기호 이름을 바꾼다.** 디버그 정보와 함께 rust 기호의
+  `.llvm.<해시>` 꼬리를 떼어, 서로 다른 codegen unit의 내부 기호 둘
+  (`drop_in_place<ffi_rs::Reader>` 등)이 같은 이름이 되었다. 그 아카이브로 링크하면 ld가
+  `duplicate symbol`을 낸다. 걷기 전 아카이브로는 깨끗하다.
+- **`ld -r -S`**는 오브젝트의 기호 표를 다시 쓴다 (지역 기호가 늘었다). 버렸다.
+
+그래서 `llvm-objcopy --strip-debug`를 쓰고, 그것은 **Bazel이 rust 빌드에 받아 둔 clang
+꾸러미**(`external/*clang_mac*/bin/llvm-objcopy`)에서 찾는다. rust 갈래를 세운 기계라면
+있다. 캐시를 지웠다면 `-ObjcopyPath`로 다른 LLVM의 것을 준다. 멤버 빼기와 심볼 표는
+Xcode의 `ar d`·`ranlib`가 한다.
+
+같은 자리에서 **내장 bitcode**(`__LLVM,__bitcode`·`__cmdline`)도 걷는다. Rust 표준 라이브러리의
+오브젝트가 rustc의 LTO를 위해 담고 나오는 것으로 Release rust 아카이브의 3분의 2였다
+(걷은 뒤 3.2 MB). Xcode 14부터 ld는 그것을 읽지 않는다. 더 중요한 이유가 있다 — 그것이
+있으면 Xcode의 `llvm-nm`이 Mach-O 기호표 대신 **bitcode의 기호**를 읽어, 중복을 고르는
+쪽이 `_Unwind_Resume` 같은 미정의 기호를 못 본다. 그래서 mac에서는 먼저 걷고, 걷은
+아카이브로 고른다.
+
+하나 더 — Mach-O에서 `llvm-nm --undefined-only`는 형 글자 없이 이름만 적는다
+(`member.o: _name`, ELF는 `U name`). 처음의 파서는 그 줄을 버려 미정의 기호를 하나도 못
+읽었고, rust 코드가 찾는 cxx 브리지 멤버(`rs_srcs.o`)까지 뺐다. 링크가 `SkStreamAdapter`
+기호 넷에서 깨져 드러났다. 지금은 이름 하나뿐인 줄을 미정의로 읽는다.
+
+### 9.6 소비자가 지킬 것과 확인
+
+1. **framework 다섯을 링크한다**: `CoreFoundation`, `CoreGraphics`, `CoreText`,
+   `Metal`, `Foundation`. `features.json`의 core `system_libraries`에 `.framework`로 적혀
+   있다. 하나씩 빼 보면 CoreGraphics·CoreText·Metal·Foundation은 링크가 깨진다.
+   CoreFoundation은 Foundation이 다시 내보내 빠져도 서지만, Skia가 CF 함수를 직접
+   부르므로 목록에 둔다. 기능별 아카이브는 새 framework를 요구하지 않는다 — 텍스트의
+   ICU는 `dlopen`으로 연다.
+2. **링크 순서는 Android와 같게** 권한다 (core → 기능 → rust 둘). Apple의 ld는 순서로
+   정의를 고르지 않지만 같은 명령줄을 쓰게 하려는 것이다. `-Wl,--allow-multiple-definition`
+   같은 것은 들지 않는다 — Skia의 `BUILD.gn`도 mac에서는 그 플래그를 주지 않는다.
+3. **하한은 macOS 11이다.** 그보다 낮게 겨누면 ld가 `built for newer macOS version`을
+   낸다. `probe_features.ps1`은 `-mmacosx-version-min=11.0`으로 링크하고 **ld의 경고가 하나라도
+   있으면 실패로 본다.**
+4. **Metal 장치는 소비자가 만든다.** `MTLCreateSystemDefaultDevice()`와 `newCommandQueue`를
+   `GrMtlBackendContext`에 넘긴다. 둘 다 +1로 받으므로 `sk_cfp`가 그대로 가진다.
+   `tools/feature_probe.cpp`의 `ProbeMetal`은 Objective-C 없이 C++로 그렇게 한다.
+5. 정의는 다른 대상과 같고 GPU만 바뀐다: `SK_GANESH`, `SK_METAL`.
+
+`probe_features.ps1 -Target mac-arm64`는 Windows처럼 **그 자리에서 실행한다.** 열한 갈래
+(base·인코더 둘·svg·text·avif·skottie·겹친 둘·`text_fallback`·`metal`)가 Release·Debug
+모두 통과했다. `metal`은 Apple M5 Ultra에서 Ganesh로 그리고 되읽었고, `text`는
+`libicucore`를 열어 아랍어·힌디어·ZWJ 이모지를 지났다. 기기마다 다른 것 둘은 기록만
+한다 — 옛한글 조합은 기본 한글 글꼴(Apple SD Gothic Neo)에 없어 세 클러스터로 남고,
+ZWJ 가족 이모지는 Apple Color Emoji가 합자를 가져 하나로 나온다.
+
+Release 실행 파일 크기 (`-dead_strip`, 바이트):
+
+| 갈래 | 크기 | base 대비 | 링크된 표지 |
+| --- | --- | --- | --- |
+| base | 3,590,624 | | |
+| png_encode | 3,740,648 | +150,024 | png encode |
+| jpeg_encode | 3,905,352 | +314,728 | jpeg encode |
+| svg | 4,268,640 | +678,016 | expat, svg |
+| text | 4,979,440 | +1,388,816 | harfbuzz |
+| avif | 5,509,552 | +1,918,928 | avif |
+| skottie | 4,422,008 | +831,384 | skottie |
+| text_fallback | 5,292,152 | +1,701,528 | harfbuzz |
+| metal | 5,671,984 | +2,081,360 | |
+
+base에 어떤 표지도 링크되지 않는다 — 기능을 쓰지 않는 소비자에게 기능 아카이브가
+들어오지 않는다는 6장의 원칙이 mac에서도 선다.
+
+### 9.7 생산자의 경로
+
+8.7과 같은 그물이다. `build_skia.ps1`이 `-ffile-prefix-map`을 `extra_cflags`와
+`extra_asmflags`에 붙인다 — mac에는 Objective-C++(`.mm`, Metal과 CoreText)이 많아
+`extra_cflags_c`·`_cc`로는 닿지 않는다. 바꾸는 것은 저장소(→ `skia-prep`)와 Xcode의
+자리(→ `xcode`)다. 뒤엣것은 SDK 헤더가 DWARF에 남기 때문이고, `~/Applications`에 둔
+Xcode라면 사용자 이름이 실린다. 공개 `args.gn`에서는 `pack_skia.ps1`이 그 자리를
+`<xcode 27.2 (27B52)>`로 가린다. Bazel의 출력 자리(`/private/var/tmp/_bazel_<사용자>`)는
+rust 아카이브의 디버그 정보와 함께 걷힌다. 두 구성 모두 `pack_skia.ps1`의 검사를 지나고,
+따로 훑어도 사용자 이름이 나오지 않았다.
