@@ -13,14 +13,15 @@
 #
 # Windows(win-x64)에서는 소비자와 같이 **MSVC**로 컴파일하고 돌린다. Linux에서
 # -Target android-arm64로 부르면 NDK clang과 lld로 세우기만 한다 — 실행은 adb로
-# 기기에서 한다 (docs/skia-build.md 8.6).
+# 기기에서 한다 (docs/skia-build.md 8.6). macOS에서 -Target mac-arm64로 부르면 Xcode의
+# clang과 ld로 세우고 그 자리에서 돌린다 (9장).
 
 [CmdletBinding()]
 param(
     [string]$PackageRoot,
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
-    [ValidateSet('win-x64', 'android-arm64')]
+    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64')]
     [string]$Target = 'win-x64',
     [string]$BaselineRoot,
     [string]$WorkDirectory,
@@ -35,6 +36,7 @@ Set-StrictMode -Version Latest
 
 $repository_root = Split-Path -Parent $PSScriptRoot
 $is_android = $Target -like 'android-*'
+$is_mac = $Target -like 'mac-*'
 if (-not $PackageRoot) {
     $PackageRoot = Join-Path $repository_root 'build\skia-package'
 }
@@ -63,8 +65,12 @@ $variants = [ordered]@{
     # ICU를 끄고(SKIA_PREP_ICU_DISABLE) libgrapheme 백엔드로 같은 텍스트 시험을 돌린다.
     'text_fallback' = @{ features = @('core', 'text', 'text_fallback'); defines = @('PROBE_TEXT', 'PROBE_TEXT_FALLBACK') }
 }
-# 기존 GPU 백엔드다. Windows에서만 — Android의 Vulkan은 tools/android_probe.cpp가 기기에서 본다.
-if (-not $is_android) {
+# 기존 GPU 백엔드다. Windows는 Direct3D, macOS는 Metal — Android의 Vulkan은
+# tools/android_probe.cpp가 기기에서 본다.
+if ($is_mac) {
+    $variants['metal'] = @{ features = @('core'); defines = @('PROBE_METAL') }
+}
+elseif (-not $is_android) {
     $variants['d3d'] = @{ features = @('core'); defines = @('PROBE_D3D') }
 }
 if ($Only) {
@@ -132,7 +138,16 @@ function Get-SystemLibraries {
     return @($names | ForEach-Object { $features.$_.system_libraries.$Target } | Select-Object -Unique)
 }
 
-if ($is_android) {
+if ($is_mac) {
+    # 소비자와 같은 자리의 컴파일러다 — xcode-select가 고른 Xcode의 clang++.
+    $clang = "$(& xcrun --find clang++)".Trim()
+    if (-not $clang -or -not (Test-Path -LiteralPath $clang -PathType Leaf)) {
+        throw 'Xcode clang++ was not found (xcrun --find clang++).'
+    }
+    # 도구사슬 안의 clang++을 직접 부르면 SDK를 스스로 찾지 않는다 (/usr/bin의 shim만 찾는다).
+    $sdk = "$(& xcrun --sdk macosx --show-sdk-path)".Trim()
+}
+elseif ($is_android) {
     if (-not $NdkPath) {
         $NdkPath = Join-Path $HOME 'ndk/android-ndk-r27d'
     }
@@ -162,11 +177,39 @@ function Build-Variant {
     if ('PROBE_TEXT_FALLBACK' -in $defines) {
         $defines += 'SK_UNICODE_LIBGRAPHEME_IMPLEMENTATION'
     }
-    $executable = Join-Path $work ('feature_probe-{0}{1}' -f $label, $(if ($is_android) { '' } else { '.exe' }))
+    $executable = Join-Path $work ('feature_probe-{0}{1}' -f $label, $(if ($is_android -or $is_mac) { '' } else { '.exe' }))
     $map = Join-Path $work ('feature_probe-{0}.map' -f $label)
     $object_directory = Join-Path $work ('obj-' + $label)
     New-Item -ItemType Directory -Force -Path $object_directory | Out-Null
 
+    if ($is_mac) {
+        # 하한은 패키지와 같은 macOS 11이다 (toolchain.json의 macos_deployment_target).
+        # 그보다 낮게 겨누면 ld가 "built for newer macOS version"을 낸다 — 그것도 보는 자리다.
+        $arguments = @('-std=c++20', '-fno-exceptions', '-arch', 'arm64', '-mmacosx-version-min=11.0', '-isysroot', $sdk,
+            '-DSK_GANESH', '-DSK_METAL', "-I$root", "-I$(Join-Path $repository_root 'tools')")
+        $arguments += if ($Configuration -eq 'Debug') { @('-O0', '-g') } else { @('-O2', '-DNDEBUG') }
+        $arguments += ($defines | ForEach-Object { "-D$_" })
+        $arguments += @($source, '-o', $executable)
+        $arguments += @($libraries | ForEach-Object { Join-Path $library_directory $_ })
+        $arguments += @("-Wl,-map,$map")
+        # Xcode의 Release 기본값과 같다. 부르지 않은 것이 실행 파일에 남지 않는다.
+        if ($Configuration -eq 'Release') {
+            $arguments += '-Wl,-dead_strip'
+        }
+        foreach ($system in (Get-SystemLibraries -names $variant.features)) {
+            $arguments += if ($system -like '*.framework') { @('-framework', ($system -replace '\.framework$', '')) } else { "-l$system" }
+        }
+        $output = & $clang @arguments 2>&1
+        $output | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "clang++ failed for $label - its archive list in third_party/features.json is not enough."
+        }
+        $warnings = @($output | Where-Object { "$_" -match 'ld: warning' })
+        if ($warnings) {
+            throw "ld warned for $label (see above); the package should link cleanly."
+        }
+        return @{ executable = $executable; map = $map }
+    }
     if ($is_android) {
         $arguments = @('-std=c++20', '-fno-exceptions', '-DSK_GANESH', '-DSK_VULKAN', "-I$root",
             "-I$(Join-Path $repository_root 'tools')")
@@ -233,6 +276,7 @@ foreach ($label in $builds.Keys) {
     $present = @($markers.Keys | Where-Object { $map_text.Contains($markers[$_]) })
     $status = 'built'
     if (-not $is_android) {
+        # macOS도 이 자리에서 돈다. Windows와 같다.
         & $built.executable | Out-Host
         $status = if ($LASTEXITCODE -eq 0) { 'passed' } else { 'FAILED' }
         if ($LASTEXITCODE -ne 0) {

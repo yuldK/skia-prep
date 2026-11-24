@@ -16,12 +16,14 @@
 //   PROBE_SKOTTIE      Lottie JSON을 읽어 몇 프레임을 그린다
 //   PROBE_D3D          (Windows) Direct3D 12 장치를 만들어 Ganesh로 그리고 되읽는다.
 //                      Android의 Vulkan은 tools/android_probe.cpp가 본다
+//   PROBE_METAL        (macOS) 시스템 기본 Metal 장치를 만들어 Ganesh로 그리고 되읽는다
 //
 // PROBE_SVG나 PROBE_SKOTTIE에 PROBE_TEXT를 함께 주면 그 모듈의 글자가 HarfBuzz 공장으로
 // 모양 잡힌다. 하나라도 실패하면 0이 아닌 값으로 끝난다.
 //
-// 소비자와 같은 조건으로 세운다. Windows는 MSVC(/MT·/MTd), Android는 NDK clang과 lld다.
-// 정의도 소비자와 같다 — SK_GANESH와 GPU 백엔드(SK_DIRECT3D·SK_VULKAN), 텍스트를 켤 때만
+// 소비자와 같은 조건으로 세운다. Windows는 MSVC(/MT·/MTd), Android는 NDK clang과 lld,
+// macOS는 Xcode의 clang과 ld다.
+// 정의도 소비자와 같다 — SK_GANESH와 GPU 백엔드(SK_DIRECT3D·SK_VULKAN·SK_METAL), 텍스트를 켤 때만
 // SK_SHAPER_HARFBUZZ_AVAILABLE·SK_SHAPER_UNICODE_AVAILABLE·SK_UNICODE_AVAILABLE·
 // SK_UNICODE_ICU_IMPLEMENTATION. 시험 이미지는 tools/probe_assets.h에 박혀 있다.
 
@@ -88,6 +90,18 @@
 #include "include/gpu/ganesh/d3d/GrD3DDirectContext.h"
 #include <dxgi1_4.h>
 #endif
+#if defined(PROBE_METAL)
+#include "include/gpu/GpuTypes.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
+#include "include/gpu/ganesh/SkSurfaceGanesh.h"
+#include "include/gpu/ganesh/mtl/GrMtlBackendContext.h"
+#include "include/gpu/ganesh/mtl/GrMtlDirectContext.h"
+#include <objc/message.h>
+#include <objc/runtime.h>
+// Metal.framework의 C 함수다. 헤더(<Metal/Metal.h>)가 Objective-C라 이 파일을 C++로 두려고
+// 선언만 옮긴다. 돌려주는 것은 +1로 retain된 id<MTLDevice>다.
+extern "C" void* MTLCreateSystemDefaultDevice(void);
+#endif
 
 #if defined(PROBE_SVG) || defined(PROBE_TEXT) || defined(PROBE_SKOTTIE)
 #if defined(_WIN32)
@@ -95,6 +109,8 @@
 #elif defined(__ANDROID__)
 #include "include/ports/SkFontMgr_android.h"
 #include "include/ports/SkFontScanner_FreeType.h"
+#elif defined(__APPLE__)
+#include "include/ports/SkFontMgr_mac_ct.h"
 #endif
 #endif
 
@@ -283,6 +299,8 @@ sk_sp<SkFontMgr> MakeFontMgr() {
     return SkFontMgr_New_DirectWrite();
 #elif defined(__ANDROID__)
     return SkFontMgr_New_Android(nullptr, SkFontScanner_Make_FreeType());
+#elif defined(__APPLE__)
+    return SkFontMgr_New_CoreText(nullptr);
 #else
 #error "No font manager for this platform."
 #endif
@@ -291,6 +309,9 @@ sk_sp<SkFontMgr> MakeFontMgr() {
 const char* SansFamily() {
 #if defined(_WIN32)
     return "Segoe UI";
+#elif defined(__APPLE__)
+    // CoreText는 "sans-serif" 같은 총칭 이름을 모른다.
+    return "Helvetica";
 #else
     return "sans-serif";
 #endif
@@ -796,6 +817,55 @@ void ProbeD3D() {
 }
 #endif
 
+#if defined(PROBE_METAL)
+template <typename R, typename... Args>
+R Send(const void* receiver, const char* selector, Args... args) {
+    return reinterpret_cast<R (*)(const void*, SEL, Args...)>(objc_msgSend)(
+            receiver, sel_registerName(selector), args...);
+}
+
+// 시스템 기본 Metal 장치를 화면 없이 만들고 Ganesh로 그려 되읽는다. 소비자가 하는 일과
+// 같다 — 장치와 큐를 만들어 GrMtlBackendContext에 넘긴다. 둘 다 +1로 받으므로 sk_cfp가
+// 그대로 가진다.
+void ProbeMetal() {
+    GrMtlBackendContext backend;
+    backend.fDevice.reset(MTLCreateSystemDefaultDevice());
+    if (!backend.fDevice) {
+        Report("metal", false, "MTLCreateSystemDefaultDevice returned nil");
+        return;
+    }
+    const void* name = Send<const void*>(backend.fDevice.get(), "name");
+    const char* device_name = name ? Send<const char*>(name, "UTF8String") : "?";
+    backend.fQueue.reset(Send<const void*>(backend.fDevice.get(), "newCommandQueue"));
+    if (!backend.fQueue) {
+        Report("metal", false, "newCommandQueue returned nil (%s)", device_name);
+        return;
+    }
+    sk_sp<GrDirectContext> context = GrDirectContexts::MakeMetal(backend);
+    if (!context) {
+        Report("metal", false, "GrDirectContexts::MakeMetal returned null (%s)", device_name);
+        return;
+    }
+    const SkImageInfo info = SkImageInfo::Make(64, 64, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+    sk_sp<SkSurface> surface = SkSurfaces::RenderTarget(context.get(), skgpu::Budgeted::kNo, info);
+    if (!surface) {
+        Report("metal", false, "SkSurfaces::RenderTarget returned null");
+        return;
+    }
+    surface->getCanvas()->clear(SK_ColorBLUE);
+    SkPaint paint;
+    paint.setColor(SK_ColorRED);
+    surface->getCanvas()->drawRect(SkRect::MakeXYWH(16, 16, 32, 32), paint);
+    context->flushAndSubmit(surface.get(), GrSyncCpu::kYes);
+    SkBitmap bitmap;
+    bitmap.allocPixels(info);
+    const bool read = surface->readPixels(bitmap.pixmap(), 0, 0);
+    Report("metal", read && bitmap.getColor(4, 4) == SK_ColorBLUE &&
+                            bitmap.getColor(32, 32) == SK_ColorRED,
+           "Ganesh on %s drew and read back", device_name);
+}
+#endif
+
 #if defined(PROBE_SKOTTIE)
 // 100x100, 30 fps, 30 프레임. 사각형의 색이 빨강에서 파랑으로 가고, 아래에 글자가 있다.
 std::string LottieJson() {
@@ -869,6 +939,9 @@ int main() {
     ProbeBase();
 #if defined(PROBE_D3D)
     ProbeD3D();
+#endif
+#if defined(PROBE_METAL)
+    ProbeMetal();
 #endif
 #if defined(PROBE_PNG_ENCODE)
     ProbePngEncode();
