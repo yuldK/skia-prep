@@ -14,18 +14,22 @@
 # Windows(win-x64)에서는 소비자와 같이 **MSVC**로 컴파일하고 돌린다. Linux에서
 # -Target android-arm64로 부르면 NDK clang과 lld로 세우기만 한다 — 실행은 adb로
 # 기기에서 한다 (docs/skia-build.md 8.6). macOS에서 -Target mac-arm64로 부르면 Xcode의
-# clang과 ld로 세우고 그 자리에서 돌린다 (9장).
+# clang과 ld로 세우고 그 자리에서 돌린다 (9장). -Target ios-arm64-simulator는 세우고 부팅된
+# iOS 시뮬레이터에서 `xcrun simctl spawn`으로 돌리고, -Target ios-arm64(기기)는 세우기만
+# 한다 — 기기에서는 서명된 앱 꾸러미가 아니면 돌릴 수 없다 (10장).
 
 [CmdletBinding()]
 param(
     [string]$PackageRoot,
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
-    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64')]
+    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64', 'ios-arm64', 'ios-arm64-simulator')]
     [string]$Target = 'win-x64',
     [string]$BaselineRoot,
     [string]$WorkDirectory,
     [string]$NdkPath,
+    # ios-arm64-simulator에서 돌릴 시뮬레이터(이름 또는 UDID). 주지 않으면 부팅된 것 중 첫째다.
+    [string]$Simulator,
     [string[]]$Only,
     # 목록에서 빼고 링크해 본다. 그 아카이브가 정말 필요한지 확인할 때 쓴다.
     [string[]]$Without
@@ -37,6 +41,9 @@ Set-StrictMode -Version Latest
 $repository_root = Split-Path -Parent $PSScriptRoot
 $is_android = $Target -like 'android-*'
 $is_mac = $Target -like 'mac-*'
+$is_ios = $Target -like 'ios-*'
+$is_ios_simulator = $Target -like 'ios-*-simulator'
+$is_apple = $is_mac -or $is_ios
 if (-not $PackageRoot) {
     $PackageRoot = Join-Path $repository_root 'build\skia-package'
 }
@@ -67,7 +74,7 @@ $variants = [ordered]@{
 }
 # 기존 GPU 백엔드다. Windows는 Direct3D, macOS는 Metal — Android의 Vulkan은
 # tools/android_probe.cpp가 기기에서 본다.
-if ($is_mac) {
+if ($is_apple) {
     $variants['metal'] = @{ features = @('core'); defines = @('PROBE_METAL') }
 }
 elseif (-not $is_android) {
@@ -138,16 +145,44 @@ function Get-SystemLibraries {
     return @($names | ForEach-Object { $features.$_.system_libraries.$Target } | Select-Object -Unique)
 }
 
-if ($is_mac) {
+if ($is_apple) {
     # 소비자와 같은 자리의 컴파일러다 — xcode-select가 고른 Xcode의 clang++.
     $clang = "$(& xcrun --find clang++)".Trim()
     if (-not $clang -or -not (Test-Path -LiteralPath $clang -PathType Leaf)) {
         throw 'Xcode clang++ was not found (xcrun --find clang++).'
     }
     # 도구사슬 안의 clang++을 직접 부르면 SDK를 스스로 찾지 않는다 (/usr/bin의 shim만 찾는다).
-    $sdk = "$(& xcrun --sdk macosx --show-sdk-path)".Trim()
+    $apple_sdk = if ($is_ios_simulator) { 'iphonesimulator' } elseif ($is_ios) { 'iphoneos' } else { 'macosx' }
+    $sdk = "$(& xcrun --sdk $apple_sdk --show-sdk-path)".Trim()
+    # 하한은 패키지와 같다 (toolchain.json의 macos_deployment_target·ios_deployment_target).
+    # 그보다 낮게 겨누면 ld가 "built for newer ... version"을 낸다 — 그것도 보는 자리다.
+    $target_flags = if ($is_ios_simulator) { @('-target', 'arm64-apple-ios15.0-simulator') }
+    elseif ($is_ios) { @('-target', 'arm64-apple-ios15.0') }
+    else { @('-arch', 'arm64', '-mmacosx-version-min=11.0') }
 }
-elseif ($is_android) {
+# 시뮬레이터에서 돌릴 자리다. 부팅은 하지 않는다 — 그것은 사람이 고른다.
+$simulator_udid = ''
+if ($is_ios_simulator) {
+    $devices = (& xcrun simctl list devices --json | ConvertFrom-Json).devices
+    $all = @($devices.PSObject.Properties | Where-Object { $_.Name -like '*iOS*' } | ForEach-Object { $_.Value })
+    $chosen = if ($Simulator) {
+        $all | Where-Object { $_.udid -eq $Simulator -or $_.name -eq $Simulator } | Select-Object -First 1
+    }
+    else {
+        $all | Where-Object { $_.state -eq 'Booted' } | Select-Object -First 1
+    }
+    if (-not $chosen -or $chosen.state -ne 'Booted') {
+        $example = ($all | Where-Object { $_.isAvailable } | Select-Object -First 1).name
+        throw @"
+-Target $Target runs the probes in a booted iOS simulator, and none was found$(if ($Simulator) { " for '$Simulator'" }).
+Boot one, then run this again:
+  xcrun simctl boot "$example"
+"@
+    }
+    $simulator_udid = $chosen.udid
+    Write-Output "simulator      : $($chosen.name) ($simulator_udid)"
+}
+if ($is_android) {
     if (-not $NdkPath) {
         $NdkPath = Join-Path $HOME 'ndk/android-ndk-r27d'
     }
@@ -156,7 +191,7 @@ elseif ($is_android) {
         throw "The NDK clang was not found: $clang"
     }
 }
-else {
+elseif (-not $is_apple) {
     Import-MsvcEnvironment
 }
 
@@ -177,15 +212,13 @@ function Build-Variant {
     if ('PROBE_TEXT_FALLBACK' -in $defines) {
         $defines += 'SK_UNICODE_LIBGRAPHEME_IMPLEMENTATION'
     }
-    $executable = Join-Path $work ('feature_probe-{0}{1}' -f $label, $(if ($is_android -or $is_mac) { '' } else { '.exe' }))
+    $executable = Join-Path $work ('feature_probe-{0}{1}' -f $label, $(if ($is_android -or $is_apple) { '' } else { '.exe' }))
     $map = Join-Path $work ('feature_probe-{0}.map' -f $label)
     $object_directory = Join-Path $work ('obj-' + $label)
     New-Item -ItemType Directory -Force -Path $object_directory | Out-Null
 
-    if ($is_mac) {
-        # 하한은 패키지와 같은 macOS 11이다 (toolchain.json의 macos_deployment_target).
-        # 그보다 낮게 겨누면 ld가 "built for newer macOS version"을 낸다 — 그것도 보는 자리다.
-        $arguments = @('-std=c++20', '-fno-exceptions', '-arch', 'arm64', '-mmacosx-version-min=11.0', '-isysroot', $sdk,
+    if ($is_apple) {
+        $arguments = @('-std=c++20', '-fno-exceptions') + $target_flags + @('-isysroot', $sdk,
             '-DSK_GANESH', '-DSK_METAL', "-I$root", "-I$(Join-Path $repository_root 'tools')")
         $arguments += if ($Configuration -eq 'Debug') { @('-O0', '-g') } else { @('-O2', '-DNDEBUG') }
         $arguments += ($defines | ForEach-Object { "-D$_" })
@@ -275,7 +308,15 @@ foreach ($label in $builds.Keys) {
     $map_text = Get-Content -Raw -LiteralPath $built.map
     $present = @($markers.Keys | Where-Object { $map_text.Contains($markers[$_]) })
     $status = 'built'
-    if (-not $is_android) {
+    if ($is_ios_simulator) {
+        # 시뮬레이터의 프로세스로 돈다. 표준 출력과 종료 코드가 그대로 돌아온다.
+        & xcrun simctl spawn $simulator_udid $built.executable | Out-Host
+        $status = if ($LASTEXITCODE -eq 0) { 'passed' } else { 'FAILED' }
+        if ($LASTEXITCODE -ne 0) {
+            $failures++
+        }
+    }
+    elseif (-not $is_android -and -not $is_ios) {
         # macOS도 이 자리에서 돈다. Windows와 같다.
         & $built.executable | Out-Host
         $status = if ($LASTEXITCODE -eq 0) { 'passed' } else { 'FAILED' }
