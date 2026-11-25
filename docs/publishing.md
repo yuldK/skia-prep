@@ -9,7 +9,8 @@ luil이 `skia_use_rust_png_decode=true`를 요구 인자로 못 박았고, APNG�
 그것뿐이다.
 
 1~6장은 `win-x64`의 절차다. `android-arm64`는 같은 스크립트를 Linux에서 돌리며,
-다른 것만 7장에 모았다. `mac-arm64`는 Mac에서 돌리고 8장에 모았다.
+다른 것만 7장에 모았다. `mac-arm64`는 Mac에서 돌리고 8장에, `ios-arm64`·`ios-arm64-simulator`도
+Mac에서 돌리고 9장에 모았다.
 
 ## 1. 준비
 
@@ -366,3 +367,37 @@ gh release create skia-157-b94213a11b3a-mac-arm64-r1 \
 luil에는 아직 macOS 핀이 없다. luil이 macOS를 세우기 시작할 때 이 자산을 가리키는 핀을
 따로 둔다. 소비자는 framework 다섯(`CoreFoundation`·`CoreGraphics`·`CoreText`·`Metal`·
 `Foundation`)을 링크하고 `SK_METAL`을 정의한다 (skia-build.md 9.6).
+
+## 9. iOS 패키지
+
+준비와 이유는 [skia-build.md](skia-build.md) 10장에 있다. 8장과 같은 Mac에서, 대상 둘을 각각
+세우고 싼다. 산출 자리가 겹치지 않게 `-Destination`을 대상마다 준다.
+
+```bash
+pwsh scripts/build_skia.ps1 -Target ios-arm64 -Configuration Release -RustPng
+pwsh scripts/build_skia.ps1 -Target ios-arm64 -Configuration Debug   -RustPng
+pwsh scripts/verify_skia_root.ps1 -Target ios-arm64
+pwsh scripts/pack_skia.ps1 -Target ios-arm64 -Configuration Release -Destination build/skia-package-ios-arm64 -Archive
+pwsh scripts/pack_skia.ps1 -Target ios-arm64 -Configuration Debug -Destination build/skia-package-ios-arm64-debug -Archive
+pwsh scripts/probe_features.ps1 -Target ios-arm64 -PackageRoot build/skia-package-ios-arm64 -Configuration Release
+```
+
+시뮬레이터는 `-Target ios-arm64-simulator`로 같고, probe는 부팅된 시뮬레이터에서 돈다
+(`xcrun simctl boot "iPhone 18 Pro"`, 그리고 `-Simulator "iPhone 18 Pro"`). 기기용 probe는
+링크까지만 본다. 열한 갈래가 모두 `passed`(시뮬레이터)·`built`(기기)여야 올린다.
+
+157 r1 (2026-11-25):
+
+| 자산 | 압축 | 푼 뒤 |
+| --- | --- | --- |
+| `skia-prep-b94213a11b3a-r1-ios-arm64-release.zip` | 11.4 MB | 32.3 MB |
+| `skia-prep-b94213a11b3a-r1-ios-arm64-debug.zip` | 177.1 MB | 693.8 MB |
+| `skia-prep-b94213a11b3a-r1-ios-arm64-simulator-release.zip` | 11.5 MB | 32.6 MB |
+| `skia-prep-b94213a11b3a-r1-ios-arm64-simulator-debug.zip` | 177.2 MB | 694.3 MB |
+
+**태그에 대상을 넣는다** (7장과 같은 이유). 판번을 대상마다 세므로 기기와 시뮬레이터의 태그도
+따로다: `skia-157-b94213a11b3a-ios-arm64-r1`, `skia-157-b94213a11b3a-ios-arm64-simulator-r1`.
+`gh release create`의 꼴은 8장과 같고, `--latest=false`를 준다.
+
+luil에는 아직 iOS 핀이 없다. 소비자는 framework 다섯을 링크하고 `SK_METAL`을 정의하며, 기기용과
+시뮬레이터용을 섞지 않는다 (skia-build.md 10.4).

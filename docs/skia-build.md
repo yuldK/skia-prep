@@ -3,7 +3,8 @@
 luil은 Skia를 자동으로 내려받거나 빌드하지 않는다.
 
 1~7장은 Windows 대상(`win-x64`)의 것이다. Android 대상(`android-arm64`)은 Linux에서
-세우고, 다른 것만 8장에 모았다. macOS 대상(`mac-arm64`)은 Mac에서 세우고 9장에 모았다.
+세우고, 다른 것만 8장에 모았다. macOS 대상(`mac-arm64`)은 Mac에서 세우고 9장에, iOS 대상
+(`ios-arm64`·`ios-arm64-simulator`)도 Mac에서 세우고 10장에 모았다.
 
 사용자가 1회 직접 빌드하고, CMake는 그 산출물을 검사해 연결만 한다.
 
@@ -1334,7 +1335,7 @@ GN이 만든 `obj/core.ninja`에서 읽어 `toolchain.json`에 적는다.
 
 **패치**는 공통 다섯에 rust 갈래의 하나가 더해진다.
 
-- `runtime-icu-system`(공통) — macOS의 `libicucore.A.dylib`도 연다. 이름에 판번이 없어
+- `runtime-icu-system`(공통) — macOS의 `libicucore.A.dylib`도 연다 (10장에서 iOS도 더했다). 이름에 판번이 없어
   Android·Windows와 같은 길이다. macOS 27.2에서 필요한 함수 30개와 선택 셋이 모두
   찾아진다. 처음에는 mac 몫을 따로 된 패치로 그 위에 겹쳐 걸었는데, "이미 걸렸는가"
   판정(`git apply --reverse --check`)이 아래 패치를 걸리지 않은 것으로 보아 두 번째
@@ -1447,3 +1448,147 @@ Xcode라면 사용자 이름이 실린다. 공개 `args.gn`에서는 `pack_skia.
 `<xcode 27.2 (27B52)>`로 가린다. Bazel의 출력 자리(`/private/var/tmp/_bazel_<사용자>`)는
 rust 아카이브의 디버그 정보와 함께 걷힌다. 두 구성 모두 `pack_skia.ps1`의 검사를 지나고,
 따로 훑어도 사용자 이름이 나오지 않았다.
+
+## 10. iOS 대상 (2026-11-25)
+
+iPhone·iPad용 패키지다. 대상이 둘이다.
+
+| 대상 | 무엇인가 | LC_BUILD_VERSION |
+| --- | --- | --- |
+| `ios-arm64` | iPhone·iPad 기기. 앱을 내는 것은 이쪽이다 | 2 (iOS) |
+| `ios-arm64-simulator` | Apple Silicon Mac의 iOS 시뮬레이터 | 7 (iOS simulator) |
+
+같은 arm64라도 기기와 시뮬레이터는 서로 링크되지 않는 다른 플랫폼이라 패키지가 따로다.
+배치는 다른 대상과 같다 — xcframework가 아니라 Skia 트리 모양의 zip 하나씩이다. 두
+패키지를 xcframework로 묶을지는 소비자의 몫이다. x86_64 시뮬레이터와 arm64e는 내지 않는다.
+발행 갈래는 다른 대상과 같은 rust png다. 이 장의 실측은 macOS 27.2(arm64), Xcode 27.2,
+iOS SDK 27.2에서 했다.
+
+### 10.1 준비
+
+9.2와 같다 — 같은 Mac, 같은 submodule, 같은 Skia 트리다. 더 드는 것은 Xcode의 **iOS 플랫폼**
+하나다 (Xcode > Settings > Components). 기능 probe를 돌리려면 iOS 시뮬레이터 런타임도 든다.
+
+**mac과 iOS를 한 트리에서 번갈아 세울 수 있다.** iOS 패치는 `MODULE.bazel.lock`을 바꿔 crate
+판번을 옮기므로(10.3) mac 빌드에 남으면 안 된다. 그래서 `build_skia.ps1`이 이 빌드가 걸지
+않는 패치가 걸려 있으면 **먼저 뺀다** (`patch : taken out (...)`). 서로 위에 얹힌 패치가
+있어 더 뺄 것이 없을 때까지 되풀이한다. 실측: iOS 네 구성을 세운 트리에서 mac을 세우자
+iOS 패치 둘이 빠지고 lock이 원래로 돌아갔으며, `libskia.a`·`libharfbuzz.a`가 mac r1
+패키지와 바이트까지 같았다.
+
+### 10.2 빌드·검증·패키징
+
+```bash
+pwsh scripts/build_skia.ps1 -Target ios-arm64 -Configuration Release -RustPng
+pwsh scripts/build_skia.ps1 -Target ios-arm64 -Configuration Debug   -RustPng
+pwsh scripts/verify_skia_root.ps1 -Target ios-arm64
+pwsh scripts/pack_skia.ps1 -Target ios-arm64 -Configuration Release -Destination build/skia-package-ios-arm64 -Archive
+pwsh scripts/pack_skia.ps1 -Target ios-arm64 -Configuration Debug -Destination build/skia-package-ios-arm64-debug -Archive
+```
+
+시뮬레이터는 `-Target ios-arm64-simulator`로 같은 다섯 줄이다.
+
+| 자산 | 압축 | 푼 뒤 |
+| --- | --- | --- |
+| `skia-prep-b94213a11b3a-r1-ios-arm64-release.zip` | 11.4 MB | 32.3 MB |
+| `skia-prep-b94213a11b3a-r1-ios-arm64-debug.zip` | 177.1 MB | 693.8 MB |
+| `skia-prep-b94213a11b3a-r1-ios-arm64-simulator-release.zip` | 11.5 MB | 32.6 MB |
+| `skia-prep-b94213a11b3a-r1-ios-arm64-simulator-debug.zip` | 177.2 MB | 694.3 MB |
+
+크기와 아카이브 목록은 mac과 같다. 라이브러리 이름도 같다 — `features.json`의 `ios-arm64`·
+`ios-arm64-simulator` 목록은 `mac-arm64`의 것을 그대로 옮겼다. Bazel 캐시는 mac·iOS 둘을
+세운 뒤 5 GB다.
+
+`verify_skia_root.ps1`이 iOS에서 더 보는 것:
+
+- args의 `ios_use_simulator`가 대상과 맞는가, `ios_min_target`이 있는가.
+- 아카이브 member의 **플랫폼**(LC_BUILD_VERSION 2·7)이 대상과 맞는가. 기기와 시뮬레이터는
+  CPU가 같아 CPU 검사로는 가려지지 않는다.
+- **fat 아카이브가 아닌가** (arm64e가 붙으면 fat이 된다, 아래).
+- 모든 대상에 더한 검사 하나 — **ICU 아카이브에 runtime 로더가 들었는가.** 처음 세운 iOS의
+  `libskunicode_icu.a`는 mac의 70 KB가 아니라 14 MB였다. BUILD.gn이 runtime 로더를 iOS에서
+  켜지 않아 ICU 전체를 컴파일해 넣은 것인데, args의 `skia_use_runtime_icu = true`는 그대로라
+  다른 검사를 다 지났다. 이제 아카이브에 로더의 문자열(`SKIA_PREP_ICU_DISABLE`)이 있는지 본다.
+
+### 10.3 다른 대상과 다른 것
+
+**args**는 `skia-ui-ios-arm64-{release,debug}.gn`과 `skia-ui-ios-arm64-simulator-{release,debug}.gn`이다.
+mac의 것과 GPU(Metal)·글꼴(CoreText)·ICU(libicucore)·코덱·기능이 같고, 다른 것은 셋이다.
+
+- `target_os = "ios"`, `ios_use_simulator`(기기 false, 시뮬레이터 true).
+- **`ios_min_target = "15.0"`** — 배포 하한(IPHONEOS_DEPLOYMENT_TARGET)이다. Xcode 27이 받는
+  가장 낮은 값(SDK의 `SupportedTargets.iphoneos.MinimumDeploymentTarget`)이다. mac과 달리
+  GN이 스스로 정하지 않아, 주지 않으면 SDK 판번(27)이 하한이 된다.
+- `toolchain.json`은 `macos_sdk`·`macos_deployment_target` 자리에 **`ios_sdk`·
+  `ios_deployment_target`·`ios_simulator`**를 적는다. 나머지 키는 mac과 같다.
+
+**패치**는 셋이 더해진다 (mac의 rust 패치 위에).
+
+- `ios-arm64-only`(png 갈래와 무관) — Skia의 GN은 iOS arm64에 `-arch arm64 -arch arm64e`를
+  준다. 모든 오브젝트와 아카이브가 두 slice를 묶은 fat 파일이 되어 `libskia.a`가 27 MB였다
+  (mac은 13 MB). 서드파티 앱은 App Store에 arm64e를 낼 수 없고 rust 아카이브는 arm64뿐이라
+  arm64만 남긴다.
+- `runtime-icu-system`(공통, 고쳤다) — iOS에서도 runtime 로더를 세우고 libicucore를 연다.
+  iOS는 `SK_BUILD_FOR_MAC`이 아니라 `SK_BUILD_FOR_IOS`를 정의해 로더가 둘을 다 본다.
+  `libicucore.A.dylib`는 iOS에도 있고(dyld shared cache) SDK가 `libicucore.tbd`로 내보인다.
+  mac 쪽 오브젝트는 바이트까지 그대로다.
+- `bazel-rust-ios`(rust) — rust png의 iOS 빌드. Skia 157의 iOS Bazel 도구사슬은 쓸 수 없었다.
+  `.bazelrc`가 등록하는 `clang_ios_arm64_toolchain`의 `@clang_ios` 저장소를 `MODULE.bazel`이
+  정의하지 않고("No repository visible as '@clang_ios'"), 받을 clang 15.0.1은 지금의 libc++
+  헤더에 너무 낡았으며, 플래그는 언제나 시뮬레이터를 겨눈다. 그래서 **mac 도구사슬(clang 22)에
+  iOS SDK를 물린다.**
+  - `download_mac_toolchain.bzl`이 iPhoneOS·iPhoneSimulator SDK도 symlink하고, SDK마다
+    컴파일 파일 묶음과 layering check용 module map을 낸다 (module map이 없으면
+    `module //src/core:core does not depend on a module exporting 'cstdint'`로 멈췄다).
+  - `mac_toolchain_config.bzl`에 `sdk`·`target_triple` 속성 둘. mac의 동작은 그대로다.
+  - `toolchain/BUILD.bazel`에 기기(`arm64-apple-ios15.0`)·시뮬레이터
+    (`arm64-apple-ios15.0-simulator`) 도구사슬, `.bazelrc`가 낡은 것 대신 둘을 등록한다.
+  - `bazel/platform`에 `ios_arm64_hermetic`·`ios_simulator_arm64_hermetic`. rules_rust는
+    `aarch64-apple-ios`와 `-sim`을 apple_support의 device/simulator 제약으로 가르므로
+    플랫폼마다 하나씩 단다 (`MODULE.bazel`에 apple_support를 직접 의존으로 더한다 — rules_rust가
+    이미 끌어오는 판번이라 모듈 그래프는 그대로다).
+  - `MODULE.bazel`의 Rust 대상에 `aarch64-apple-ios-sim`을, crate 지원 목록에 iOS 둘을 더한다.
+  - `BUILD.gn`이 iOS arm64에서 Bazel에 그 플랫폼을 넘긴다 (mac에서 이미 하듯이).
+
+  **lock째 담는다** (8.4의 Android와 같은 이유). crate 확장의 입력이 바뀌면 Bazel이 고정되지
+  않은 전이 crate를 그날의 crates.io로 다시 푼다 — 2026-11-25에 `cc` 1.4.4 → 1.11.3,
+  `crc32fast` 1.5.1 → 1.5.6 등 26개가 옮겨 갔다. 그래서 **crate 판번이 mac과 다르고**, 고지
+  사본도 따로다 (`third_party/rust-licenses/ios-arm64`). 기기와 시뮬레이터는 같은 lock으로
+  같은 crate가 서서 사본 하나를 함께 쓴다.
+
+Bazel 쪽 iOS 도구사슬이 하는 일은 컴파일과 아카이브뿐이다. rust 정적 라이브러리는 링크하지
+않고, 빌드 도구(build script·proc macro)는 mac 도구사슬로 선다.
+
+### 10.4 소비자가 지킬 것과 확인
+
+1. **framework는 mac과 같은 다섯이다**: `CoreFoundation`, `CoreGraphics`, `CoreText`,
+   `Metal`, `Foundation`. UIKit은 들지 않는다 — CoreText 쪽이 UIKit 기호를 `dlsym`으로 찾는다.
+2. **하한은 iOS 15.0이다.** `-miphoneos-version-min=15.0`(시뮬레이터는
+   `-target arm64-apple-ios15.0-simulator`)보다 낮게 겨누면 ld가 경고한다.
+3. **기기용과 시뮬레이터용을 섞지 않는다.** 섞으면 ld가 `building for 'iOS-simulator', but linking
+   in object file ... built for 'iOS'`로 멈춘다 (실측). 둘 다 쓰는 앱은 둘을 xcframework로 묶거나 SDK마다
+   다른 자리를 링크한다.
+4. 정의·Metal 장치·링크 순서는 mac과 같다 (9.6).
+
+`probe_features.ps1 -Target ios-arm64-simulator`는 세운 실행 파일을 **부팅된 시뮬레이터에서
+`xcrun simctl spawn`으로 돌린다** (`-Simulator`로 이름이나 UDID를 고른다. 부팅은 사람이 한다:
+`xcrun simctl boot "iPhone 18 Pro"`). 열한 갈래가 iPhone 18 Pro와 iPad mini(A20 Pro)
+시뮬레이터에서 Release, iPhone에서 Debug로 모두 통과했다. `metal`은 시뮬레이터의 GPU로
+Ganesh를 돌렸고, `text`는 시뮬레이터의 `libicucore`를 열었다.
+
+`-Target ios-arm64`(기기)는 **링크까지만** 본다 (Android와 같다) — 기기에서 명령줄 실행 파일을
+돌리려면 서명된 앱 꾸러미가 든다. 열한 갈래가 Release·Debug 모두 경고 없이 링크됐다. 기기
+위의 실행은 아직 확인하지 않았다.
+
+Release 실행 파일 크기 (바이트, `-dead_strip`):
+
+| 갈래 | 기기 | 시뮬레이터 |
+| --- | --- | --- |
+| base | 3,577,656 | 3,588,592 |
+| svg | 4,233,624 | 4,249,680 |
+| text | 4,920,648 | 4,977,216 |
+| avif | 5,366,520 | 5,506,720 |
+| skottie | 4,418,368 | 4,435,864 |
+| metal | 5,641,400 | 5,668,416 |
+
+base에 기능 표지가 하나도 링크되지 않는 것은 다른 대상과 같다.

@@ -16,17 +16,19 @@ bazel 캐시 15 GB — 을 이 저장소 하나가 떠안는다. `luil`을 쓰�
 | `win-x64` (157 r1) | Windows | clang-cl | Direct3D | 21.1 MB · 148.2 MB (+ Release 심볼 84.9 MB) |
 | `android-arm64` (157 r1) | Linux (WSL2) | NDK r27d clang | Vulkan | 18.5 MB · 57.2 MB |
 | `mac-arm64` (157 r1) | macOS (Apple Silicon) | Xcode clang | Metal | 11.5 MB · 177.3 MB |
+| `ios-arm64` (157 r1) | macOS (Apple Silicon) | Xcode clang | Metal | 11.4 MB · 177.1 MB |
+| `ios-arm64-simulator` (157 r1) | macOS (Apple Silicon) | Xcode clang | Metal | 11.5 MB · 177.2 MB |
 
 Skia는 157(`b94213a11b`, chrome/m157)이다.
 
-세 대상 모두 SVG(`SkSVGDOM`), 텍스트 모양 잡기(HarfBuzz·시스템 ICU·SkParagraph),
+모든 대상이 SVG(`SkSVGDOM`), 텍스트 모양 잡기(HarfBuzz·시스템 ICU·SkParagraph),
 ICU가 없는 플랫폼의 fallback(libgrapheme), Skottie, AVIF 디코드를 **기능별로 떨어진
 아카이브**로 싣는다. 쓰지 않는 기능의 아카이브는 링크하지 않아도 되고, 기능 아카이브가
 늘어도 기존 목록만 링크한 실행 파일의 크기는 그대로다. 표와 쓰는 법은
 [docs/skia-build.md](docs/skia-build.md) 6장에 있다.
 
-iOS는 아직 없다. Skia의 iOS Bazel 도구사슬이 macOS에서만 돌아 Mac이 필요하다 —
-macOS 대상이 서는 Mac이면 그 자리다.
+iOS는 iPhone·iPad 기기(`ios-arm64`)와 Apple Silicon Mac의 시뮬레이터(`ios-arm64-simulator`)
+둘이다. 서로 링크되지 않는 플랫폼이라 패키지가 따로다.
 
 > 이 저장소가 내는 것은 **Google과 무관한 비공식 빌드**다. Skia의 BSD-3-Clause 3항에
 > 따라 저작권자와 기여자의 이름을 이 배포물의 홍보에 쓰지 않는다. Skia는 Google이
@@ -48,7 +50,7 @@ NOTICE.md             정적으로 들어간 모든 것의 고지를 모은 한 
 NOTICE.json           아카이브마다 담긴 것과 기능마다 링크되는 것의 고지 id
 licenses/rust/        rust 갈래에서만. Rust 표준 라이브러리 고지
 VERSION.json          Skia commit·밀번·png 갈래·도구사슬·패키지 판번·파일별 SHA-256
-out/skia-ui-release/  *.lib *.a args.gn toolchain.json   (Android·macOS는 *.a뿐이다)
+out/skia-ui-release/  *.lib *.a args.gn toolchain.json   (Android·macOS·iOS는 *.a뿐이다)
 out/skia-ui-debug/    (Debug 패키지)
 ```
 
@@ -163,6 +165,27 @@ macOS 27 SDK의 `.tbd`를 읽지 못해 Bazel이 Xcode의 `ld`로 링크하게 �
 바로 돌아 열한 갈래(Metal 포함)가 Release·Debug 모두 통과했다. 자세한 것은
 [docs/skia-build.md](docs/skia-build.md) 9장에 있다.
 
+### iOS
+
+macOS와 같은 Mac에서, Xcode의 iOS 플랫폼을 더해 같은 스크립트를 돌린다. 대상은 둘이다 —
+`ios-arm64`(iPhone·iPad 기기)와 `ios-arm64-simulator`. 배포 하한은 iOS 15.0이다.
+
+```bash
+pwsh scripts/build_skia.ps1 -Target ios-arm64 -Configuration Release -RustPng
+pwsh scripts/build_skia.ps1 -Target ios-arm64 -Configuration Debug   -RustPng
+pwsh scripts/verify_skia_root.ps1 -Target ios-arm64
+pwsh scripts/pack_skia.ps1 -Target ios-arm64 -Configuration Release -Destination build/skia-package-ios-arm64 -Archive
+pwsh scripts/pack_skia.ps1 -Target ios-arm64 -Configuration Debug -Destination build/skia-package-ios-arm64-debug -Archive
+```
+
+패치가 셋 더 든다 — arm64e를 빼는 것(Skia는 iOS arm64를 arm64 + arm64e fat으로 세운다),
+runtime ICU가 iOS의 `libicucore`도 여는 것, 그리고 rust png를 iOS용으로 세우는 것(Skia 157의
+iOS Bazel 도구사슬은 등록조차 되지 않아, mac의 clang 22에 iOS SDK를 물린다. crate lock째 담는다).
+mac과 iOS를 한 Skia 트리에서 번갈아 세워도 된다 — 스크립트가 그 빌드가 쓰지 않는 패치를 먼저
+뺀다. 소비자가 링크할 framework는 mac과 같은 다섯이다. 기능 probe가 시뮬레이터(iPhone·iPad)에서
+열한 갈래 모두 돌았고, 기기용은 링크까지 확인했다. 자세한 것은
+[docs/skia-build.md](docs/skia-build.md) 10장에 있다.
+
 발행 절차는 [docs/publishing.md](docs/publishing.md)에 있다.
 
 ## 라이선스
@@ -181,7 +204,7 @@ MIT / Apache-2.0 / 0BSD / Zlib crate들. 상호주의 조항은 없다.
 BSD-3 + 특허 허여(libyuv), ISC(libgrapheme), MIT(Windows·macOS의 Expat). 앱이 실을 고지는 쓰는 기능에 따라
 다르다 — 패키지의 `NOTICE.json`이 기능마다 적는다.
 
-macOS 패키지는 더하는 것이 없다 — GPU·글꼴·ICU가 모두 시스템의 것이다.
+macOS·iOS 패키지는 더하는 것이 없다 — GPU·글꼴·ICU가 모두 시스템의 것이다.
 
 Android 패키지에는 넷이 더 들어간다: MIT(Vulkan Memory Allocator·Expat),
 Apache-2.0(NDK의 cpu-features), 그리고 FreeType. FreeType은 FTL과 GPLv2 중 하나를
