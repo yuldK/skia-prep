@@ -8,6 +8,7 @@
 #   scripts\refresh_rust_licenses.ps1 -Target win-x64          (Windows에서)
 #   pwsh scripts/refresh_rust_licenses.ps1 -Target android-arm64   (WSL에서)
 #   pwsh scripts/refresh_rust_licenses.ps1 -Target mac-arm64       (Mac에서)
+#   pwsh scripts/refresh_rust_licenses.ps1 -Target ios-arm64       (Mac에서, 시뮬레이터도 이 사본을 쓴다)
 #
 # build_skia.ps1 -RustPng로 그 대상을 한 번 세운 뒤에 돈다 — 그래야 Bazel의 output base에
 # 그 대상의 crate가 받아져 있다. 배치는 Bazel의 것과 같다. 걷는 것은 crate 저장소마다
@@ -17,7 +18,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64')]
+    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64', 'ios-arm64', 'ios-arm64-simulator')]
     [string]$Target,
     [string]$SkiaRoot,
     [string]$BazeliskPath
@@ -36,10 +37,12 @@ $mac_host = (Test-Path -LiteralPath 'variable:IsMacOS') -and $IsMacOS
 $built_here = switch ($Target) {
     'win-x64' { $windows_host }
     'mac-arm64' { $mac_host }
+    'ios-arm64' { $mac_host }
+    'ios-arm64-simulator' { $mac_host }
     default { -not $windows_host -and -not $mac_host }
 }
 if (-not $built_here) {
-    throw "-Target $Target must run where it is built (win-x64 on Windows, android-arm64 on Linux, mac-arm64 on macOS)."
+    throw "-Target $Target must run where it is built (win-x64 on Windows, android-arm64 on Linux, mac-arm64 and ios-* on macOS)."
 }
 
 $bazelisk = $BazeliskPath
@@ -93,7 +96,10 @@ if (-not $library_notice -or -not (Test-Path -LiteralPath $library_notice -PathT
     throw "The Rust standard library notice was not found under $external."
 }
 
-$destination = Join-Path $repository_root (Join-Path 'third_party\rust-licenses' $Target)
+# iOS 기기와 시뮬레이터는 같은 lock으로 같은 crate가 서서 사본 하나(ios-arm64)를 함께 쓴다
+# (pack_skia.ps1의 $license_target).
+$license_target = if ($Target -like 'ios-*') { 'ios-arm64' } else { $Target }
+$destination = Join-Path $repository_root (Join-Path 'third_party\rust-licenses' $license_target)
 $before = @()
 if (Test-Path -LiteralPath $destination) {
     $before = @(Get-ChildItem -LiteralPath $destination -Directory | ForEach-Object Name)

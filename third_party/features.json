@@ -1,9 +1,9 @@
 {
     "schema": 1,
-    "comment": "기능별 아카이브 목록이다. pack_skia.ps1이 이것으로 NOTICE.json을 만들고 패키지에 싣는다. scripts/probe_features.ps1이 기능마다 이 목록만 더해 링크한다. 순서가 Android의 링크 순서다 (docs/skia-build.md 6.2). mac-arm64의 system_libraries에서 .framework로 끝나는 것은 -framework로 링크한다.",
+    "comment": "기능별 아카이브 목록이다. pack_skia.ps1이 이것으로 NOTICE.json을 만들고 패키지에 싣는다. scripts/probe_features.ps1이 기능마다 이 목록만 더해 링크한다. 순서가 Android의 링크 순서다 (docs/skia-build.md 6.2). mac-arm64·ios-arm64·ios-arm64-simulator의 system_libraries에서 .framework로 끝나는 것은 -framework로 링크한다.",
     "features": {
         "core": {
-            "description": "Skia 본체. 래스터, GPU(Windows Direct3D, Android Vulkan, macOS Metal), png(rust)·jpeg·webp·gif 디코드와 png(rust)·jpeg·webp 인코드. r2/r1과 같은 목록이다.",
+            "description": "Skia 본체. 래스터, GPU(Windows Direct3D, Android Vulkan, macOS·iOS Metal), png(rust)·jpeg·webp·gif 디코드와 png(rust)·jpeg·webp 인코드. r2/r1과 같은 목록이다.",
             "requires": [],
             "libraries": {
                 "win-x64": [
@@ -24,6 +24,18 @@
                     "libjpeg.a", "libjpeg12.a", "libjpeg16.a",
                     "libwebp.a", "libwebp_sse41.a", "libwuffs.a",
                     "librust_png_ffi_rs.a", "libcxx_cc.a"
+                ],
+                "ios-arm64": [
+                    "libskia.a", "libskcms.a",
+                    "libjpeg.a", "libjpeg12.a", "libjpeg16.a",
+                    "libwebp.a", "libwebp_sse41.a", "libwuffs.a",
+                    "librust_png_ffi_rs.a", "libcxx_cc.a"
+                ],
+                "ios-arm64-simulator": [
+                    "libskia.a", "libskcms.a",
+                    "libjpeg.a", "libjpeg12.a", "libjpeg16.a",
+                    "libwebp.a", "libwebp_sse41.a", "libwuffs.a",
+                    "librust_png_ffi_rs.a", "libcxx_cc.a"
                 ]
             },
             "system_libraries": {
@@ -33,6 +45,10 @@
                 ],
                 "android-arm64": [ "android", "log" ],
                 "mac-arm64": [ "CoreFoundation.framework", "CoreGraphics.framework", "CoreText.framework",
+                    "Metal.framework", "Foundation.framework" ],
+                "ios-arm64": [ "CoreFoundation.framework", "CoreGraphics.framework", "CoreText.framework",
+                    "Metal.framework", "Foundation.framework" ],
+                "ios-arm64-simulator": [ "CoreFoundation.framework", "CoreGraphics.framework", "CoreText.framework",
                     "Metal.framework", "Foundation.framework" ]
             },
             "notices": {
@@ -46,6 +62,12 @@
                 ],
                 "mac-arm64": [
                     "skia", "skcms", "libjpeg-turbo", "libwebp", "wuffs", "rust"
+                ],
+                "ios-arm64": [
+                    "skia", "skcms", "libjpeg-turbo", "libwebp", "wuffs", "rust"
+                ],
+                "ios-arm64-simulator": [
+                    "skia", "skcms", "libjpeg-turbo", "libwebp", "wuffs", "rust"
                 ]
             }
         },
@@ -55,13 +77,17 @@
             "libraries": {
                 "win-x64": [ "svg.lib", "skshaper.lib", "skresources.lib" ],
                 "android-arm64": [ "libsvg.a", "libskshaper.a", "libskresources.a" ],
-                "mac-arm64": [ "libsvg.a", "libskshaper.a", "libskresources.a" ]
+                "mac-arm64": [ "libsvg.a", "libskshaper.a", "libskresources.a" ],
+                "ios-arm64": [ "libsvg.a", "libskshaper.a", "libskresources.a" ],
+                "ios-arm64-simulator": [ "libsvg.a", "libskshaper.a", "libskresources.a" ]
             },
-            "system_libraries": { "win-x64": [], "android-arm64": [], "mac-arm64": [] },
+            "system_libraries": { "win-x64": [], "android-arm64": [], "mac-arm64": [], "ios-arm64": [], "ios-arm64-simulator": [] },
             "notices": {
                 "win-x64": [ "expat" ],
                 "android-arm64": [],
-                "mac-arm64": [ "expat" ]
+                "mac-arm64": [ "expat" ],
+                "ios-arm64": [ "expat" ],
+                "ios-arm64-simulator": [ "expat" ]
             }
         },
         "text": {
@@ -79,13 +105,23 @@
                 "mac-arm64": [
                     "libskparagraph.a", "libskshaper.a", "libskunicode_icu.a", "libskunicode_core.a",
                     "libharfbuzz.a"
+                ],
+                "ios-arm64": [
+                    "libskparagraph.a", "libskshaper.a", "libskunicode_icu.a", "libskunicode_core.a",
+                    "libharfbuzz.a"
+                ],
+                "ios-arm64-simulator": [
+                    "libskparagraph.a", "libskshaper.a", "libskunicode_icu.a", "libskunicode_core.a",
+                    "libharfbuzz.a"
                 ]
             },
-            "system_libraries": { "win-x64": [], "android-arm64": [], "mac-arm64": [] },
+            "system_libraries": { "win-x64": [], "android-arm64": [], "mac-arm64": [], "ios-arm64": [], "ios-arm64-simulator": [] },
             "notices": {
                 "win-x64": [ "harfbuzz", "icu" ],
                 "android-arm64": [ "harfbuzz", "icu" ],
-                "mac-arm64": [ "harfbuzz", "icu" ]
+                "mac-arm64": [ "harfbuzz", "icu" ],
+                "ios-arm64": [ "harfbuzz", "icu" ],
+                "ios-arm64-simulator": [ "harfbuzz", "icu" ]
             }
         },
         "text_fallback": {
@@ -94,13 +130,17 @@
             "libraries": {
                 "win-x64": [ "skunicode_libgrapheme.lib" ],
                 "android-arm64": [ "libskunicode_libgrapheme.a" ],
-                "mac-arm64": [ "libskunicode_libgrapheme.a" ]
+                "mac-arm64": [ "libskunicode_libgrapheme.a" ],
+                "ios-arm64": [ "libskunicode_libgrapheme.a" ],
+                "ios-arm64-simulator": [ "libskunicode_libgrapheme.a" ]
             },
-            "system_libraries": { "win-x64": [], "android-arm64": [], "mac-arm64": [] },
+            "system_libraries": { "win-x64": [], "android-arm64": [], "mac-arm64": [], "ios-arm64": [], "ios-arm64-simulator": [] },
             "notices": {
                 "win-x64": [ "libgrapheme", "icu" ],
                 "android-arm64": [ "libgrapheme", "icu" ],
-                "mac-arm64": [ "libgrapheme", "icu" ]
+                "mac-arm64": [ "libgrapheme", "icu" ],
+                "ios-arm64": [ "libgrapheme", "icu" ],
+                "ios-arm64-simulator": [ "libgrapheme", "icu" ]
             }
         },
         "skottie": {
@@ -115,10 +155,16 @@
                 ],
                 "mac-arm64": [
                     "libskottie.a", "libsksg.a", "libjsonreader.a", "libskresources.a", "libskshaper.a"
+                ],
+                "ios-arm64": [
+                    "libskottie.a", "libsksg.a", "libjsonreader.a", "libskresources.a", "libskshaper.a"
+                ],
+                "ios-arm64-simulator": [
+                    "libskottie.a", "libsksg.a", "libjsonreader.a", "libskresources.a", "libskshaper.a"
                 ]
             },
-            "system_libraries": { "win-x64": [], "android-arm64": [], "mac-arm64": [] },
-            "notices": { "win-x64": [], "android-arm64": [], "mac-arm64": [] }
+            "system_libraries": { "win-x64": [], "android-arm64": [], "mac-arm64": [], "ios-arm64": [], "ios-arm64-simulator": [] },
+            "notices": { "win-x64": [], "android-arm64": [], "mac-arm64": [], "ios-arm64": [], "ios-arm64-simulator": [] }
         },
         "avif": {
             "description": "AVIF 디코드(libavif + libgav1 + libyuv). 기본 디코더 목록에 없다. SkCodecs::Register(SkAvifDecoder::LibAvif::Decoder())로 등록하거나 디코더 목록에 직접 넘긴다.",
@@ -126,13 +172,17 @@
             "libraries": {
                 "win-x64": [ "avif_decoder.lib", "libavif.lib", "libgav1.lib", "libyuv.lib" ],
                 "android-arm64": [ "libavif_decoder.a", "libavif.a", "libgav1.a", "libyuv.a" ],
-                "mac-arm64": [ "libavif_decoder.a", "libavif.a", "libgav1.a", "libyuv.a" ]
+                "mac-arm64": [ "libavif_decoder.a", "libavif.a", "libgav1.a", "libyuv.a" ],
+                "ios-arm64": [ "libavif_decoder.a", "libavif.a", "libgav1.a", "libyuv.a" ],
+                "ios-arm64-simulator": [ "libavif_decoder.a", "libavif.a", "libgav1.a", "libyuv.a" ]
             },
-            "system_libraries": { "win-x64": [], "android-arm64": [], "mac-arm64": [] },
+            "system_libraries": { "win-x64": [], "android-arm64": [], "mac-arm64": [], "ios-arm64": [], "ios-arm64-simulator": [] },
             "notices": {
                 "win-x64": [ "libavif", "libgav1", "libyuv" ],
                 "android-arm64": [ "libavif", "libgav1", "libyuv" ],
-                "mac-arm64": [ "libavif", "libgav1", "libyuv" ]
+                "mac-arm64": [ "libavif", "libgav1", "libyuv" ],
+                "ios-arm64": [ "libavif", "libgav1", "libyuv" ],
+                "ios-arm64-simulator": [ "libavif", "libgav1", "libyuv" ]
             }
         }
     }

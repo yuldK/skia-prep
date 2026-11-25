@@ -32,7 +32,7 @@ param(
     [string]$SkiaRoot,
     [ValidateSet('Debug', 'Release')]
     [string[]]$Configuration = @('Release'),
-    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64')]
+    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64', 'ios-arm64', 'ios-arm64-simulator')]
     [string]$Target = 'win-x64',
     # build_skia.ps1의 -OutputSuffix와 같은 값이다. 읽는 자리만 바뀐다 —
     # **패키지 안의 배치는 언제나 out/skia-ui-{구성}이다.** 소비자의 계약이 그것이다.
@@ -43,7 +43,7 @@ param(
     # $package_revision의 주석에 있다.
     [int]$PackageRevision,
     [string]$BazeliskPath,
-    # mac-arm64에서 rust 아카이브의 디버그 정보를 걷는 llvm-objcopy다. Xcode에는 없다.
+    # mac·iOS에서 rust 아카이브의 디버그 정보를 걷는 llvm-objcopy다. Xcode에는 없다.
     # 주지 않으면 Bazel이 rust 빌드에 받아 둔 clang 꾸러미의 것을 찾는다 (Resolve-MacObjcopy).
     [string]$ObjcopyPath,
     [string]$RustLicenseRoot,
@@ -68,7 +68,14 @@ Set-StrictMode -Version Latest
 $repository_root = Split-Path -Parent $PSScriptRoot
 $is_android = $Target -like 'android-*'
 $is_mac = $Target -like 'mac-*'
-$target_part = if ($is_android -or $is_mac) { "$Target-" } else { '' }
+$is_ios = $Target -like 'ios-*'
+$is_ios_simulator = $Target -like 'ios-*-simulator'
+# mac과 iOS는 같은 Xcode 도구로 싸고 배치도 같다. 갈리는 것은 패치 목록과 toolchain 키뿐이다.
+$is_apple = $is_mac -or $is_ios
+$target_part = if ($is_android -or $is_apple) { "$Target-" } else { '' }
+# rust crate 고지 사본의 자리다. iOS 기기와 시뮬레이터는 같은 lock(skia-157-bazel-rust-ios.patch)으로
+# 같은 crate가 서므로 사본 하나(ios-arm64)를 함께 쓴다.
+$license_target = if ($is_ios) { 'ios-arm64' } else { $Target }
 if (-not $SkiaRoot) {
     $SkiaRoot = Join-Path $repository_root 'third_party\skia'
 }
@@ -89,8 +96,8 @@ if (-not $Destination) {
 # win-x64는 luil CMakeLists.txt의 LUIL_SKIA_COMPONENTS에서 png 갈래 몫을 뺀 목록이다
 # (파일 이름 그대로). verify_skia_root.ps1도 같은 목록을 갖는다.
 # android-arm64에서는 libpng과 zlib이 png 갈래와 무관하게 들어간다 — freetype이
-# 컬러 이모지 때문에 끌어온다. mac-arm64는 Windows와 같은 모양이다 (verify_skia_root.ps1).
-if ($is_mac) {
+# 컬러 이모지 때문에 끌어온다. mac-arm64·iOS 둘은 Windows와 같은 모양이다 (verify_skia_root.ps1).
+if ($is_apple) {
     $components = @(
         'libskia.a', 'libskcms.a',
         'libjpeg.a', 'libjpeg12.a', 'libjpeg16.a',
@@ -167,6 +174,9 @@ $package_revisions = @{
     'win-x64'       = 1
     'android-arm64' = 1
     'mac-arm64'     = 1
+    # 첫 iOS 패키지다 (Skia 157). 기기와 시뮬레이터는 따로 센다.
+    'ios-arm64'           = 1
+    'ios-arm64-simulator' = 1
 }
 $package_revision = $package_revisions[$Target]
 
@@ -207,7 +217,7 @@ if ($is_android) {
         @{ id = 'freetype'; name = 'FreeType - license choice'; path = (Join-Path $externals_root 'freetype\LICENSE.TXT') },
         @{ id = 'freetype'; name = 'FreeType - The FreeType Project License (FTL)'; path = (Join-Path $externals_root 'freetype\docs\FTL.TXT') })
 }
-elseif (-not $is_mac) {
+elseif (-not $is_apple) {
     $common_notices += @(
         @{ id = 'spirv-cross'; name = 'SPIRV-Cross'; path = (Join-Path $externals_root 'spirv-cross\LICENSE') },
         @{ id = 'spirv-headers'; name = 'SPIRV-Headers'; path = (Join-Path $externals_root 'spirv-headers\LICENSE') },
@@ -357,7 +367,7 @@ function Resolve-RustLicenseRoot {
         return (Resolve-Path -LiteralPath $RustLicenseRoot).Path
     }
 
-    $vendored = Join-Path $repository_root (Join-Path 'third_party\rust-licenses' $Target)
+    $vendored = Join-Path $repository_root (Join-Path 'third_party\rust-licenses' $license_target)
     if (Test-Path -LiteralPath $vendored -PathType Container) {
         return (Resolve-Path -LiteralPath $vendored).Path
     }
@@ -384,11 +394,11 @@ function Resolve-RustLicenseRoot {
 This is a rust png build, and its crate notices were not found.
 
 Looked in:
-  third_party\rust-licenses\$Target  (this repository's copy - it is missing)
+  third_party\rust-licenses\$license_target  (this repository's copy - it is missing)
   bazelisk info output_base          (bazelisk.exe was not found)
 
 Do one of these:
-  1. Restore third_party\rust-licenses\$Target from git - it is the cheap path and
+  1. Restore third_party\rust-licenses\$license_target from git - it is the cheap path and
      needs no Bazel at all.
   2. Pass -BazeliskPath <path to bazelisk.exe>.
   3. Pass -RustLicenseRoot <the "external" directory of the Bazel output base>.
@@ -678,7 +688,7 @@ function Invoke-MacObjcopy {
 function Invoke-ArchiveStrip {
     param([string]$source, [string]$destination, [string]$objcopy, [string[]]$drop = @())
 
-    if ($is_mac) {
+    if ($is_apple) {
         # 4단계가 이미 Invoke-MacObjcopy로 걷어 $destination에 두었다. 남은 것은 멤버 빼기다.
         if ($source -ne $destination) {
             Invoke-MacObjcopy -objcopy $objcopy -source $source -destination $destination
@@ -908,7 +918,13 @@ Write-Output "Skia root      : $skia_root"
 Write-Output "Target         : $Target"
 Write-Output "Configurations : $($configurations -join ', ')"
 Write-Output "png codec      : $png_codec"
-if ($is_mac) {
+if ($is_ios) {
+    Write-Output ("toolchain      : {0}, Xcode {1}, iOS SDK {2}{3}, deployment target {4}, rust bridge {5}" -f
+        $toolchain_record.compiler_version, $toolchain_record.xcode_version, $toolchain_record.ios_sdk,
+        $(if ($toolchain_record.ios_simulator) { ' (simulator)' } else { '' }),
+        $toolchain_record.ios_deployment_target, $toolchain_record.rust_bridge_compiler_version)
+}
+elseif ($is_mac) {
     Write-Output ("toolchain      : {0}, Xcode {1}, macOS SDK {2}, deployment target {3}, rust bridge {4}" -f
         $toolchain_record.compiler_version, $toolchain_record.xcode_version, $toolchain_record.macos_sdk,
         $toolchain_record.macos_deployment_target, $toolchain_record.rust_bridge_compiler_version)
@@ -1025,7 +1041,7 @@ foreach ($build in $builds) {
         $machine_paths["$($toolchain_record.ndk)"] = "<android-ndk r$($toolchain_record.ndk_revision)>"
     }
     # mac의 prefix map에는 Xcode의 자리가 든다. ~/Applications에 둔 Xcode라면 사용자 이름이다.
-    if ($is_mac) {
+    if ($is_apple) {
         $developer = "$(& xcode-select -p 2>$null)".Trim()
         if ($developer) {
             $machine_paths[$developer] = "<xcode $($toolchain_record.xcode_version)>"
@@ -1067,7 +1083,7 @@ foreach ($build in $builds) {
     $objcopy = ''
     if ($png_codec -eq 'rust') {
         $strip_components = $rust_png_components
-        $objcopy = if ($is_mac) {
+        $objcopy = if ($is_apple) {
             Resolve-MacObjcopy
         }
         elseif ($is_android) {
@@ -1091,12 +1107,12 @@ foreach ($build in $builds) {
             $drop = @()
             # mac은 먼저 걷고 나서 고른다 (Invoke-ArchiveStrip의 주석). 걷기 전에는 Xcode의
             # llvm-nm이 내장 bitcode의 기호를 읽어 Mach-O 기호표와 다른 것을 본다.
-            if ($is_mac) {
+            if ($is_apple) {
                 Invoke-MacObjcopy -objcopy $objcopy -source $source -destination $published_file
                 $source = $published_file
             }
             if ($component -eq 'librust_png_ffi_rs.a') {
-                $nm = if ($is_mac) { "$(& xcrun --find llvm-nm)".Trim() }
+                $nm = if ($is_apple) { "$(& xcrun --find llvm-nm)".Trim() }
                 else { Join-Path (Split-Path -Parent $objcopy) $(if ($is_android) { 'llvm-nm' } else { 'llvm-nm.exe' }) }
                 $others = @($build.required | Where-Object { $_ -ne $component } |
                         ForEach-Object { Join-Path $build.directory $_ })
@@ -1227,7 +1243,7 @@ Write-Output ('notices        : {0} components -> NOTICE.md' -f $notices.Count)
 #               Windows의 skia.lib는 expat을 담지만, expat은 SVG(XML 파서)를 쓸 때만 링크된다.
 # rust 아카이브는 crate 전부와 Rust 표준 라이브러리, 그리고 함께 담긴 Skia 오브젝트다.
 # mac에서는 Xcode의 ar(BSD)다. `ar t`가 멤버 이름을 내는 것은 같다.
-$llvm_ar = if ($is_mac) {
+$llvm_ar = if ($is_apple) {
     "$(& xcrun --find ar)".Trim()
 }
 elseif ($is_android) {
@@ -1345,8 +1361,14 @@ if (Test-Path -LiteralPath $milestone_file -PathType Leaf) {
 $patches = @('skia-157-separable-avif.patch', 'skia-157-skshaper-legacy-split.patch',
     'skia-157-runtime-icu-system.patch', 'skia-157-module-archives.patch',
     'skia-157-separable-libgrapheme.patch')
+if ($is_ios) {
+    $patches += 'skia-157-ios-arm64-only.patch'
+}
 if ($png_codec -eq 'rust') {
-    $patches += if ($is_mac) {
+    $patches += if ($is_ios) {
+        @('skia-157-bazel-rust-mac-toolchain.patch', 'skia-157-bazel-rust-ios.patch')
+    }
+    elseif ($is_mac) {
         @('skia-157-bazel-rust-mac-toolchain.patch')
     }
     elseif ($is_android) {
@@ -1363,7 +1385,20 @@ if ($png_codec -eq 'rust') {
 # 같은 Skia commit에서 나온 두 패키지를 가르는 것이 이것이다.
 # commit만으로는 구별되지 않으므로 판번과 함께 적는다.
 # win-x64의 키는 그대로 둔다 — luil의 fetch_skia.ps1이 이 파일을 읽는다.
-$version_toolchain = if ($is_mac) {
+$version_toolchain = if ($is_ios) {
+    [ordered]@{
+        compiler                     = $toolchain_record.compiler
+        compiler_version             = $toolchain_record.compiler_version
+        linker                       = $toolchain_record.linker
+        xcode_version                = $toolchain_record.xcode_version
+        ios_sdk                      = $toolchain_record.ios_sdk
+        ios_deployment_target        = $toolchain_record.ios_deployment_target
+        ios_simulator                = [bool]$toolchain_record.ios_simulator
+        rust_bridge_compiler_version = $toolchain_record.rust_bridge_compiler_version
+        is_trivial_abi               = $false
+    }
+}
+elseif ($is_mac) {
     [ordered]@{
         compiler                     = $toolchain_record.compiler
         compiler_version             = $toolchain_record.compiler_version

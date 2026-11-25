@@ -7,7 +7,7 @@ param(
     [string]$SkiaRoot,
     [string[]]$Configurations = @('Debug', 'Release'),
     # build_skia.ps1의 -Target과 같은 값이다. 읽는 자리와 판정이 갈린다.
-    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64')]
+    [ValidateSet('win-x64', 'android-arm64', 'mac-arm64', 'ios-arm64', 'ios-arm64-simulator')]
     [string]$Target = 'win-x64',
     # build_skia.ps1의 -OutputSuffix와 같은 값이다.
     [string]$OutputSuffix
@@ -22,14 +22,20 @@ if (-not $SkiaRoot) {
 }
 $is_android = $Target -like 'android-*'
 $is_mac = $Target -like 'mac-*'
-$target_part = if ($is_android -or $is_mac) { "$Target-" } else { '' }
+$is_ios = $Target -like 'ios-*'
+$is_ios_simulator = $Target -like 'ios-*-simulator'
+$is_apple = $is_mac -or $is_ios
+$target_part = if ($is_android -or $is_apple) { "$Target-" } else { '' }
+# Mach-O의 LC_BUILD_VERSION이 적는 플랫폼 번호다. 기기와 시뮬레이터는 서로 링크되지 않는다.
+$apple_platform_id = if ($is_ios_simulator) { 7 } elseif ($is_ios) { 2 } else { 1 }
+$apple_platform_name = if ($is_ios_simulator) { 'iOS simulator' } elseif ($is_ios) { 'iOS' } else { 'macOS' }
 
 # win-x64는 luil CMakeLists.txt의 LUIL_SKIA_COMPONENTS에서 png 갈래 몫을 뺀 목록이다
 # (파일 이름 그대로). android-arm64는 build_skia.ps1이 내는 것 전부다 — libpng과
 # zlib은 freetype이 끌어오므로 png 갈래와 무관하게 이쪽에 있고, cpu-features는
 # NDK의 sources/android/cpufeatures를 Skia가 컴파일한 것이다. mac-arm64는 Windows와 같은
 # 모양이다 — GPU의 external이 없고(Metal은 시스템의 것이다), libpng·zlib은 libpng 갈래에만 있다.
-if ($is_mac) {
+if ($is_apple) {
     $components = @(
         'libskia.a', 'libskcms.a',
         'libjpeg.a', 'libjpeg12.a', 'libjpeg16.a',
@@ -76,9 +82,9 @@ $codec_arguments = @(
     @{ name = 'skia_use_harfbuzz'; reason = 'the text feature (SkShapers::HB, SkParagraph)' },
     @{ name = 'skia_use_runtime_icu'; reason = 'SkUnicode loads the platform ICU; no ICU data ships' },
     @{ name = 'skia_prep_avif_archive'; reason = 'AVIF in its own archive, outside the default decoder list' })
-$required_arguments = if ($is_mac) {
+$required_arguments = if ($is_apple) {
     @(
-        @{ name = 'skia_use_metal'; reason = 'the macOS GPU backend' },
+        @{ name = 'skia_use_metal'; reason = "the $apple_platform_name GPU backend" },
         @{ name = 'skia_use_fonthost_mac'; reason = 'system fonts (CoreText)' },
         @{ name = 'skia_use_expat'; reason = 'the svg XML parser' }) + $codec_arguments
 }
@@ -184,18 +190,23 @@ public static class SkiaArchiveElf {
     }
 }
 
-// ar 아카이브의 Mach-O member가 무슨 CPU용이고 배포 하한이 얼마인지 센다 (mac 대상).
+// ar 아카이브의 Mach-O member가 무슨 CPU·플랫폼용이고 배포 하한이 얼마인지 센다 (mac·iOS 대상).
 //
 // BSD ar는 긴 이름을 "#1/<길이>"로 적고 이름을 본문 앞에 붙인다. 그만큼 건너뛰고 본다.
 // 하한은 LC_BUILD_VERSION(0x32)의 minos, 옛 오브젝트는 LC_VERSION_MIN_MACOSX(0x24)의
 // version이다. 둘 다 xxxx.yy.zz를 (주 << 16) | (부 << 8) | 수로 적는다.
 public static class SkiaArchiveMachO {
-    // 반환: [arm64 member 수, 다른 CPU member 수, 첫 다른 cputype, 가장 높은 하한, 하한이 없는 member 수].
-    public static long[] Inspect(string path) {
-        long arm64 = 0, other = 0, first_other = -1, max_min = 0, no_min = 0;
+    // 반환: [arm64 member 수, 다른 CPU member 수, 첫 다른 cputype, 가장 높은 하한, 하한이 없는 member 수,
+    //        LC_BUILD_VERSION의 플랫폼이 platform과 다른 member 수, 그 첫 플랫폼].
+    // fat 아카이브(여러 CPU를 묶은 것)면 [-1, ...]이다.
+    public static long[] Inspect(string path, long platform) {
+        long arm64 = 0, other = 0, first_other = -1, max_min = 0, no_min = 0, wrong = 0, first_wrong = -1;
         using (FileStream file = File.OpenRead(path))
         using (BinaryReader reader = new BinaryReader(file)) {
             byte[] magic = reader.ReadBytes(8);
+            if (magic[0] == 0xCA && magic[1] == 0xFE && magic[2] == 0xBA && magic[3] == 0xBE) {
+                return new long[] { -1, 0, -1, 0, 0, 0, -1 };
+            }
             if (System.Text.Encoding.ASCII.GetString(magic) != "!<arch>\n") {
                 throw new InvalidDataException("not an ar archive: " + path);
             }
@@ -230,9 +241,14 @@ public static class SkiaArchiveMachO {
                         uint cmd = reader.ReadUInt32();
                         uint cmdsize = reader.ReadUInt32();
                         if (cmd == 0x32) {
-                            reader.ReadUInt32();        // platform
+                            uint member_platform = reader.ReadUInt32();
                             found = reader.ReadUInt32();
-                        } else if (cmd == 0x24) {
+                            if (member_platform != platform) {
+                                wrong++;
+                                if (first_wrong < 0) { first_wrong = member_platform; }
+                            }
+                        } else if (cmd == 0x24 || cmd == 0x25 || cmd == 0x2F) {
+                            // LC_VERSION_MIN_MACOSX·_IPHONEOS·_TVOS. 옛 꼴이라 플랫폼은 묻지 않는다.
                             found = reader.ReadUInt32();
                         }
                         if (cmdsize < 8) { break; }
@@ -243,7 +259,7 @@ public static class SkiaArchiveMachO {
                 file.Position = start + size + (size & 1);
             }
         }
-        return new long[] { arm64, other, first_other, max_min, no_min };
+        return new long[] { arm64, other, first_other, max_min, no_min, wrong, first_wrong };
     }
 
     public static string Version(long encoded) {
@@ -309,7 +325,7 @@ function Find-Dumpbin {
 }
 
 # COFF 지시문 검사는 Windows 대상의 것이다. Android(ELF)·mac(Mach-O) 아카이브는 dumpbin이 읽지 못한다.
-$dumpbin = if ($is_android -or $is_mac) { '' } else { Find-Dumpbin }
+$dumpbin = if ($is_android -or $is_apple) { '' } else { Find-Dumpbin }
 
 foreach ($configuration in $Configurations) {
     Write-Output ''
@@ -383,6 +399,18 @@ foreach ($configuration in $Configurations) {
                 $arguments_text -match 'target_cpu\s*=\s*"arm64"'
             Add-Result "$configuration/target" $target_ok 'target_os = "mac", target_cpu = "arm64"'
         }
+        elseif ($is_ios) {
+            # iOS는 기기와 시뮬레이터를 ios_use_simulator 한 줄이 가른다. 하한(ios_min_target)도
+            # args가 말한다 — 없으면 GN이 하한을 정하지 않아 SDK 판번이 하한이 된다.
+            $simulator_value = if ($is_ios_simulator) { 'true' } else { 'false' }
+            $target_ok = $arguments_text -match 'target_os\s*=\s*"ios"' -and
+                $arguments_text -match 'target_cpu\s*=\s*"arm64"' -and
+                $arguments_text -match ('ios_use_simulator\s*=\s*{0}' -f $simulator_value)
+            Add-Result "$configuration/target" $target_ok ('target_os = "ios", target_cpu = "arm64", ios_use_simulator = {0}' -f $simulator_value)
+            $ios_min = if ($arguments_text -match 'ios_min_target\s*=\s*"([0-9.]+)"') { $Matches[1] } else { '' }
+            Add-Result "$configuration/ios_min_target" ([bool]$ios_min) `
+                $(if ($ios_min) { "iOS $ios_min" } else { "ios_min_target is not set; the SDK's iOS becomes the minimum" })
+        }
         elseif ($is_android) {
             # Android의 도구사슬은 NDK다. args가 대상과 NDK를 함께 말해야 한다.
             $target_ok = $arguments_text -match 'target_os\s*=\s*"android"' -and
@@ -429,24 +457,30 @@ foreach ($configuration in $Configurations) {
         }
     }
 
-    # mac에서 아카이브에 물을 것은 CPU와 배포 하한이다. GN이 세운 것은 GN의 -target을
+    # mac·iOS에서 아카이브에 물을 것은 CPU와 플랫폼과 배포 하한이다. GN이 세운 것은 GN의 -target을
     # 따르고, 어긋날 수 있는 것은 Bazel이 세운 rust 아카이브다 — GN이 넘기는 플랫폼이
     # 빠지면 호스트용으로 서고, 그 C++ 도구사슬의 하한(원래 macos12)이 GN과 다르면
     # 소비자의 링크가 "built for newer macOS version" 경고를 낸다. 하한이
     # toolchain.json의 macos_deployment_target(build_skia.ps1이 GN의 컴파일 명령에서 읽는다)보다
     # 높은 member가 하나라도 있으면 실패다.
-    if ($is_mac) {
+    #
+    # iOS는 둘이 더 있다. 플랫폼(LC_BUILD_VERSION의 2 기기, 7 시뮬레이터)이 대상과 다른
+    # member가 있으면 실패다 — 같은 arm64라 CPU로는 가려지지 않고, 기기용 아카이브에
+    # 시뮬레이터 오브젝트가 섞이면 소비자의 링크에서야 드러난다. 그리고 fat 아카이브(arm64e가
+    # 붙은 것, skia-157-ios-arm64-only.patch가 빠진 빌드)도 실패다.
+    if ($is_apple) {
         $toolchain_file = Join-Path $directory 'toolchain.json'
         $declared = ''
         if (Test-Path -LiteralPath $toolchain_file -PathType Leaf) {
-            $declared = "$((Get-Content -Raw -LiteralPath $toolchain_file | ConvertFrom-Json).macos_deployment_target)"
+            $record = Get-Content -Raw -LiteralPath $toolchain_file | ConvertFrom-Json
+            $declared = if ($is_ios) { "$($record.ios_deployment_target)" } else { "$($record.macos_deployment_target)" }
         }
         $minimum = if ($declared -match '^([0-9]+)(?:\.([0-9]+))?') {
             ([long]$Matches[1] -shl 16) -bor ([long]$(if ($Matches[2]) { $Matches[2] } else { 0 }) -shl 8)
         }
         else { 0 }
         Add-Result "$configuration/deployment target" ($minimum -gt 0) `
-            $(if ($minimum) { "macOS $declared (toolchain.json)" } else { 'toolchain.json gives no macos_deployment_target; rebuild with build_skia.ps1' })
+            $(if ($minimum) { "$apple_platform_name $declared (toolchain.json)" } else { 'toolchain.json gives no deployment target; rebuild with build_skia.ps1' })
         $macho_archives = @('libskia.a')
         if ($png_codec -eq 'rust') {
             $macho_archives += $rust_png_components
@@ -456,23 +490,45 @@ foreach ($configuration in $Configurations) {
             if (-not (Test-Path -LiteralPath $library -PathType Leaf)) {
                 continue
             }
-            $counts = [SkiaArchiveMachO]::Inspect($library)
+            $counts = [SkiaArchiveMachO]::Inspect($library, $apple_platform_id)
+            if ($counts[0] -lt 0) {
+                Add-Result "$configuration/$component CPU" $false 'a fat archive (several CPUs; arm64e?); the package wants thin arm64'
+                continue
+            }
             $ok = $counts[0] -gt 0 -and $counts[1] -eq 0
             $detail = if ($counts[1] -eq 0) { '{0} arm64 objects' -f $counts[0] }
-            else { '{0} objects are not arm64 (cputype 0x{1:X}); the rust build missed the mac platform' -f $counts[1], $counts[2] }
+            else { '{0} objects are not arm64 (cputype 0x{1:X}); the rust build missed the target platform' -f $counts[1], $counts[2] }
             Add-Result "$configuration/$component CPU" $ok $detail
+            Add-Result "$configuration/$component platform" ($counts[5] -eq 0) `
+                $(if ($counts[5] -eq 0) { "$apple_platform_name (LC_BUILD_VERSION $apple_platform_id)" }
+                    else { '{0} objects are for platform {1}, not {2} ({3})' -f $counts[5], $counts[6], $apple_platform_id, $apple_platform_name })
             $highest = [SkiaArchiveMachO]::Version($counts[3])
             $min_ok = $minimum -gt 0 -and $counts[3] -le $minimum
-            Add-Result "$configuration/$component minimum macOS" $min_ok `
+            Add-Result "$configuration/$component minimum $apple_platform_name" $min_ok `
                 ('highest {0} (declared {1}){2}' -f $highest, [SkiaArchiveMachO]::Version($minimum),
                     $(if ($counts[4]) { ", $($counts[4]) objects carry none" } else { '' }))
         }
     }
 
+    # runtime ICU가 정말 runtime 로더로 섰는가. BUILD.gn은 그 로더를 플랫폼마다 따로 켜고
+    # (skia-157-runtime-icu-system.patch), 켜지지 않은 플랫폼에서는 **ICU 전체를 컴파일해**
+    # 아카이브에 넣는다 — args.gn의 skia_use_runtime_icu는 그대로 true라 위의 검사를 지난다.
+    # iOS를 처음 세웠을 때 libskunicode_icu.a가 mac의 70 KB 대신 14 MB였다 (2026-11-25).
+    # 로더가 든 아카이브에는 패치의 시험 손잡이 이름(SKIA_PREP_ICU_DISABLE)이 문자열로 있다.
+    $icu_archive = @('skunicode_icu.lib', 'libskunicode_icu.a') |
+        ForEach-Object { Join-Path $directory $_ } |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if ($icu_archive) {
+        $runtime_loader = [SkiaArchiveMarker]::Contains($icu_archive, 'SKIA_PREP_ICU_DISABLE')
+        Add-Result "$configuration/runtime ICU loader" $runtime_loader `
+            $(if ($runtime_loader) { '{0} opens the platform ICU ({1:N1} MB)' -f [System.IO.Path]::GetFileName($icu_archive), ((Get-Item -LiteralPath $icu_archive).Length / 1MB) }
+                else { 'no runtime loader; ICU itself was compiled in (BUILD.gn did not enable the loader for this platform)' })
+    }
+
     # args.gn은 "그렇게 gen했다"는 말이다. 아카이브 자신에게 무엇이 컴파일했는지
     # 묻는 자리가 따로 있어야 한다 — .llvm_addrsig가 clang만 내는 section이다.
     $archive = Join-Path $directory 'skia.lib'
-    if (-not $is_android -and -not $is_mac -and (Test-Path -LiteralPath $archive)) {
+    if (-not $is_android -and -not $is_apple -and (Test-Path -LiteralPath $archive)) {
         $built_by_clang = [SkiaArchiveMarker]::Contains($archive, '.llvm_addrsig')
         Add-Result "$configuration/built by clang-cl" $built_by_clang `
             $(if ($built_by_clang) { 'skia.lib carries LLVM sections' }
@@ -484,7 +540,12 @@ foreach ($configuration in $Configurations) {
     $toolchain_file = Join-Path $directory 'toolchain.json'
     if (Test-Path -LiteralPath $toolchain_file -PathType Leaf) {
         $toolchain = Get-Content -Raw -LiteralPath $toolchain_file | ConvertFrom-Json
-        $summary = if ($is_mac) {
+        $summary = if ($is_ios) {
+            '{0}, Xcode {1}, iOS SDK {2}{3}, deployment target {4}, rust bridge {5}' -f $toolchain.compiler_version,
+            $toolchain.xcode_version, $toolchain.ios_sdk, $(if ($toolchain.ios_simulator) { ' (simulator)' } else { '' }),
+            $toolchain.ios_deployment_target, $toolchain.rust_bridge_compiler_version
+        }
+        elseif ($is_mac) {
             '{0}, Xcode {1}, macOS SDK {2}, deployment target {3}, rust bridge {4}' -f $toolchain.compiler_version,
             $toolchain.xcode_version, $toolchain.macos_sdk, $toolchain.macos_deployment_target,
             $toolchain.rust_bridge_compiler_version
